@@ -23,6 +23,7 @@ strategies/
 .xingjian.pid
 
 research/
+counterfactual/
 
 # generated tail-cheapness charts (regenerated daily by tail_plot.py)
 figures/tail_cheapness_*.png
