@@ -121,6 +121,9 @@ class PriceSignal:
     reason: Optional[str]
 
 
+_NO_HISTORY_SIGNAL = PriceSignal(None, None, None, None, None, "no_price_history")
+
+
 @dataclass(frozen=True)
 class NewsSignal:
     """Fresh-headline counts by class within the lookback window."""
@@ -144,16 +147,19 @@ class NewHighsResult:
     reason: str
 
 
-def fetch_price_history(ticker: str) -> pd.DataFrame:
+def _yf_ticker(ticker: str):
+    """Lazy yfinance import keeps the module importable without network deps."""
     import yfinance as yf
 
-    return yf.Ticker(ticker).history(period="1y", auto_adjust=True)
+    return yf.Ticker(ticker)
+
+
+def fetch_price_history(ticker: str) -> pd.DataFrame:
+    return _yf_ticker(ticker).history(period="1y", auto_adjust=True)
 
 
 def fetch_news(ticker: str) -> list:
-    import yfinance as yf
-
-    return yf.Ticker(ticker).news
+    return _yf_ticker(ticker).news
 
 
 def _volume_confirmation(history: pd.DataFrame, breakout_idx: int, volume_multiplier: float) -> Optional[bool]:
@@ -175,10 +181,10 @@ def compute_high_stats(
     """Pure: 52-week closing high, latest close, distance, recency, volume confirmation."""
     usable = history is not None and not history.empty and {"High", "Close"} <= set(getattr(history, "columns", []))
     if not usable:
-        return PriceSignal(None, None, None, None, None, "no_price_history")
+        return _NO_HISTORY_SIGNAL
     closes = history["Close"].dropna()
     if closes.empty:
-        return PriceSignal(None, None, None, None, None, "no_price_history")
+        return _NO_HISTORY_SIGNAL
     breakout_idx = int(closes.index.get_indexer([closes.idxmax()])[0])
     high = float(closes.max())
     close = float(closes.iloc[-1])
@@ -298,16 +304,20 @@ def screen_new_highs(
     )
 
 
+def _dash_for_none(value, render):
+    return "-" if value is None else render(value)
+
+
 def _format_price(value: Optional[float]) -> str:
-    return "-" if value is None else f"{value:.2f}"
+    return _dash_for_none(value, lambda v: f"{v:.2f}")
 
 
 def _format_distance(value: Optional[float]) -> str:
-    return "-" if value is None else f"{value * 100:.1f}%"
+    return _dash_for_none(value, lambda v: f"{v * 100:.1f}%")
 
 
 def _format_days(value: Optional[int]) -> str:
-    return "-" if value is None else str(value)
+    return _dash_for_none(value, str)
 
 
 def _format_flag(value: Optional[bool]) -> str:

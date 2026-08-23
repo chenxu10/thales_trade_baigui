@@ -1,17 +1,38 @@
 """CANSLIM criterion N — fresh new highs + headline confirmation/veto verdict.
 
-Covered behaviors:
-    1. Price gate: latest close within tolerance of the 52-week CLOSING high
-       AND the high freshly set (within max_high_age_days) AND breakout
-       volume confirmed (>= multiplier x prior-session mean).
-    2. Price-gate failures carry honest reasons: "no_price_history",
-       "below_high", "stale_high", "low_volume_breakout".
-    3. News leg: fresh POSITIVE headlines confirm but cannot rescue a failed
-       price gate; fresh NEGATIVE headlines veto a passing price gate
-       ("negative_news"). Headline matching is word-boundary based and reads
-       both the legacy (title/providerPublishTime) and current
-       (content.title/content.pubDate) yfinance schemas.
-    4. Neutral headlines (earnings transcripts) are ignored.
+Covered behaviors (defaults: tolerance=0.05, max_high_age_days=30,
+volume_multiplier=1.5x the prior 10-session mean in these fixtures):
+    1. Price gate PASS: e.g. `fresh_breakout_history` — closes drift
+       90.0 -> 99.0 for 10 sessions at 1,000,000 shares, then the last day
+       prints close=102.9 / high=105.0 on 2,000,000 shares. Close == closing
+       high (distance 0.0% <= 5%), high is 0 days old (<= 30), and breakout
+       volume 2.0M >= 1.5 x 1.0M baseline -> reason=None.
+    2. Price-gate failures carry honest reasons:
+       - "below_high": high=100.0, latest close=80.0 -> distance 20% > 5%
+         tolerance (test_below_high_fails).
+       - "stale_high": close 98.5 vs high 100.0 (1.5% away, within 5%) but
+         the high was set ~17 months ago > 30 days -> fails anyway
+         (test_stale_high_fails_even_when_close_is_near).
+       - "low_volume_breakout": same shape as the passing fixture but the
+         breakout day trades only 1.1M < 1.5 x 1.0M -> vetoed
+         (test_low_volume_breakout_fails).
+       - "no_price_history": empty DataFrame -> all stats None
+         (test_missing_history_fails_with_reason). A single row with no
+         Volume column leaves volume_confirmed=None and does NOT veto
+         (test_unmeasurable_volume_does_not_veto).
+    3. News leg over a 30-day lookback ending at NOW=1_700_000_000: a
+       "FDA approval" headline 1 day old counts positive; "Phase 3 trial
+       fails" 2 days old counts negative and vetoes a passing price gate
+       ("negative_news"); a positive headline cannot rescue a stock 20%
+       below its high (still "below_high"). Headline matching is
+       word-boundary based ("Analysts find value in the industry" must not
+       match keyword "ind") and reads both the legacy
+       (title/providerPublishTime) and current
+       (content.title/content.pubDate, e.g. "2026-08-20T19:50:00Z" ->
+       unix 1787255400) yfinance schemas.
+    4. Neutral headlines ("Earnings call transcript", a 60-day-old item
+       past the cutoff, or news=None) are ignored or count as "no_news" —
+       neither rescues nor vetoes.
 
 Mock Object seam: `screen_new_highs` takes the two fetch callables as
 parameters (same injection pattern as pharma_bio_screen's `score`), so no
