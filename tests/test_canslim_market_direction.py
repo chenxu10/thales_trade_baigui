@@ -1,5 +1,5 @@
 """
-CANSLIM criterion M market direction — daily S&P 500 OHLCV -> MarketResult.
+CANSLIM criterion M market direction — dual gate (^GSPC + XBI) -> DualMarketResult.
 
 Covered behaviors:
     1. Pass: close above a rising 50-day SMA with no heavy-volume down days.
@@ -7,13 +7,17 @@ Covered behaviors:
     3. Fail: close above the SMA but the SMA has stopped rising ("ma_not_rising").
     4. Fail: more than the allowed heavy-volume down days ("distribution_days_high").
     5. Fail honestly on missing price data ("no_price_history"), never a verdict.
-    6. distribution_days counts exactly the heavy-volume down sessions in the
-       trailing window, ignoring window outsiders, normal-volume down days and
-       heavy-volume up days.
+    6. distribution_days counts heavy-volume down sessions in the trailing
+       window, each scored against ITS OWN trailing 50-session baseline (the
+       scored day excluded), ignoring window outsiders, normal-volume down
+       days and heavy-volume up days.
     7. sma / above_rising_ma unit checks; CLI exit codes via patched fetch.
+    8. Dual gate: PASS requires market AND sector legs; failure reasons are
+       labeled "market:<reason> sector:<reason>"; single-leg CLI mode works.
 
-Mock Object seam: ``market_direction`` accepts an injected ``fetch`` callable
-(same pattern as screen_universe's ``score`` param); no network anywhere.
+Mock Object seam: ``market_direction`` / ``dual_market_direction`` accept an
+injected ``fetch`` callable (same pattern as screen_universe's ``score``
+param); no network anywhere.
 """
 from unittest.mock import patch
 
@@ -23,6 +27,7 @@ import pytest
 from fentu.canslim.market_direction import (
     above_rising_ma,
     distribution_days,
+    dual_market_direction,
     main,
     market_direction,
     market_verdict,
@@ -81,6 +86,27 @@ class TestDistributionDayCounting:
 
     def test_no_down_days_in_steady_uptrend(self):
         assert distribution_days(make_ohlcv(rising_closes())) == 0
+
+    def test_per_day_baseline_adapts_to_volume_regime_change(self):
+        """A day is judged against ITS OWN trailing regime, not the latest shared window."""
+        n = 60
+        closes = [100.0] * n
+        closes[52] = 98.0   # down day just after the volume regime steps up
+        volumes = [1_000_000] * 50 + [4_000_000] * 10
+        volumes[52] = 1_500_000  # 1.5x its own still-mostly-1M baseline -> distribution
+        frame = make_ohlcv(closes, volumes)
+        # a shared last-25-session baseline (all 4M regime) would NOT flag day 52;
+        # the per-day baseline (48x1M + 2x4M) does
+        assert distribution_days(frame, volume_mult=1.25) == 1
+
+    def test_scored_day_excluded_from_own_baseline(self):
+        n = 60
+        closes = [100.0] * n
+        closes[-1] = 98.0
+        volumes = [1_000_000] * n
+        volumes[-1] = 1_300_000  # 1.3x a baseline that EXCLUDES itself
+        frame = make_ohlcv(closes, volumes)
+        assert distribution_days(frame, volume_mult=1.25) == 1
 
 
 class TestMarketVerdict:
@@ -168,14 +194,45 @@ class TestMarketDirection:
         assert result.reason == "no_price_history"
 
 
+class TestDualMarketDirection:
+    def rising_fetch(self, index):
+        return make_ohlcv(rising_closes())
+
+    def falling_fetch(self, index):
+        closes = rising_closes()[:100] + [rising_closes(130)[99] - 2.0 * i for i in range(1, 31)]
+        return make_ohlcv(closes)
+
+    def test_pass_requires_both_legs(self):
+        result = dual_market_direction("^GSPC", "XBI", fetch=self.rising_fetch)
+        assert result.passed is True
+        assert result.reason == ""
+        assert result.market.passed and result.sector.passed
+
+    def test_market_leg_failure_fails_the_gate(self):
+        result = dual_market_direction("^GSPC", "XBI", fetch=self.falling_fetch)
+        assert result.passed is False
+        assert result.reason == "market:below_50ma sector:below_50ma"
+
+    def test_sector_leg_failure_alone_fails_the_gate(self):
+        def fetch(index):
+            return make_ohlcv(rising_closes() if index == "^GSPC" else [
+                c - 5.0 for c in rising_closes()[:100]
+            ] + [rising_closes(130)[99] - 2.0 * i for i in range(1, 31)])
+        result = dual_market_direction("^GSPC", "XBI", fetch=fetch)
+        assert result.passed is False
+        assert result.market.passed is True
+        assert result.sector.passed is False
+        assert result.reason == "sector:below_50ma"
+
+
 class TestMarketDirectionCli:
     def test_main_returns_zero_and_prints_verdict_on_pass(self, capsys):
         frame = make_ohlcv(rising_closes())
         with patch("fentu.canslim.market_direction.fetch_index_history", return_value=frame):
-            code = main(["--index", "^GSPC"])
+            code = main(["--market", "^GSPC", "--sector", "XBI"])
         assert code == 0
         out = capsys.readouterr().out
-        assert "PASS" in out and "^GSPC" in out
+        assert "PASS" in out and "^GSPC" in out and "XBI" in out
 
     def test_main_returns_one_on_fail(self, capsys):
         closes = rising_closes(130)
