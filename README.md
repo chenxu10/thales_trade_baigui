@@ -59,3 +59,19 @@ uv run fentu/explatoryservices/seechange.py daily portfolio
 ```bash
 uv run pytest
 ```
+
+
+## TODO:
+- ~~(TODO): merge all seven traits and review~~ (done 2026-08-23: all 6 canslim worktree branches merged; 7-trait report at `fentu/canslim/seven_traits_report.py`)
+~~- (TODO): change pharma_bio_screen.py~~
+- (TODO): retrieve ngativity knowledge where lose moneys from your own money
+~~- (TODO): review pharm trade~~
+- (TODO): Abstract forget details-Sampling-BinaryEvent-GreenBook 
+~~- (TODO): shenxin jue cha wu jie~~
+- (TODO): Gold mutual information
+- (TODO): Fable code review
+- (TODO): Parksin law 20 percent 80 percent value/Focus on last maximial
+- (TODO): 30 year mortgage
+- (TODO): Humble trade(Field not object)
+- (TODO): BackTest Idea Loop
+- (TODO): Strategy not benchmark/not CARG/cost-effectiveness of hedges(Three huice/guonihe/survivorship bias/kanleshuju)
