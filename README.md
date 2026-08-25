@@ -79,3 +79,4 @@ uv run pytest
 ~~- (TODO): BackTest Idea Loop~~
 - (TODO): Strategy not benchmark/not CARG/cost-effectiveness of hedges(Three huice/guonihe/survivorship bias/kanleshuju)
 - (TODO): AI边界(人类的历史知识中负面和失败很少报道、小概率和样本空间以外、构建概念和建立理论)
+- TOOD: ROIC/Fautsmanratio for bio/sp/ndx
