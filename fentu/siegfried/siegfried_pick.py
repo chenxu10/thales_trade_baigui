@@ -11,26 +11,37 @@ two-pronged screen — "neither of these screens in isolation is enough":
        worth laggards are the ones the market underappreciates ("the lowest
        Faustmann ratio firms among those with high ROIC").
 
-Negative or zero Faustmann ratios (negative net worth) are excluded: a low
-ratio must mean underpricing, not a gutted balance sheet. Spitznagel ignores
-financials/banks in his own screen — do that upstream when building the
-universe, as this table has no sector column.
+The whole workbook is ranked in descending order of these criteria — ROIC
+first (higher is better), then Faustmann ratio (lower is better) — with
+non-positive net worth (negative Faustmann ratio) pushed below every
+genuine candidate: a low ratio must mean underpricing, not a gutted balance
+sheet. The top ``--top-n`` rows (default 10) are the picks.
 
-Reads a siegfried workbook produced by ``roic_faustmann`` (.ods or .xlsx,
-from any folder), ranks survivors by lowest Faustmann ratio, picks the top
-``--top-n`` (default 10), and updates the workbook **in place** — no new
-file: a "Siegfried rank" / "Siegfried pick" column pair, gold highlighting
-on picked rows, and rows re-sorted picks-first (same pattern as the CANSLIM
-seven-traits report). Running it twice is safe: existing rank/pick columns
-are reused, not duplicated.
+Updates the workbook **in place** — no new file:
+
+  * a "Siegfried rank" column (1..N over the whole universe),
+  * a "Siegfried pick" column (YES on the top ``--top-n``),
+  * a "Reason" column briefly stating why each row ranks where it does,
+  * gold highlighting on the picked rows,
+  * rows re-sorted picks-first (rank ascending),
+  * the derived metrics as live formulas for LibreOffice: ROIC (column D)
+    as ``=B/C`` and the Faustmann ratio (column J) as ``=E/I``, so they
+    recalculate when you edit the raw EBIT / invested capital / market cap /
+    net-worth inputs. (.ods only — .xlsx keeps literal values so
+    ``read_table`` still parses numerics.)
+
+Running it twice is safe: existing rank/pick/reason columns are reused, not
+duplicated. Spitznagel ignores financials/banks in his own screen — do that
+upstream when building the universe, as this table has no sector column.
 
 Usage:
     uv run python -m fentu.siegfried.siegfried_pick data/ndx100_ticker_siegfried.ods
     uv run python -m fentu.siegfried.siegfried_pick data/ndx100_ticker_siegfried.ods --top-n 10 --min-roic 0.75
 """
 import argparse
+import math
 import sys
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 
@@ -40,35 +51,72 @@ DEFAULT_TOP_N = 10
 DEFAULT_MIN_ROIC = 0.75
 RANK_COLUMN = "Siegfried rank"
 PICK_COLUMN = "Siegfried pick"
+REASON_COLUMN = "Reason"
 GOLD_STYLE = "siegfried_pick"
 GOLD_BACKGROUND = "#FFD966"
 GOLD_COLOR = "#7F6000"
 
+ROIC_COLUMN = 3  # D: derived ROIC
+FAUSTMANN_COLUMN = 9  # J: derived Faustmann ratio
+
 
 def rank_siegfrieds(table: pd.DataFrame, min_roic: float = DEFAULT_MIN_ROIC) -> pd.DataFrame:
-    """Survivors (ROIC >= min_roic, positive Faustmann ratio) ranked by lowest ratio.
+    """The whole universe ranked by Spitznagel's criteria, best first.
 
-    Rank 1 is the cheapest Siegfried — the best pick under the ch. 10 screen.
-    Non-positive Faustmann ratios are excluded: low must mean underpriced,
-    not a gutted balance sheet.
+    Positive net worth first, then ROIC descending (higher is better), then
+    Faustmann ratio ascending (lower is better); rank 1 = best candidate.
+    ``min_roic`` only flavors the Reason text — the ordering never excludes
+    a row, so the whole file gets ranked.
     """
-    survivors = table[(table["roic"] >= min_roic) & (table["faustmann_ratio"] > 0)]
-    ranked = survivors.sort_values("faustmann_ratio").reset_index(drop=True)
+    frame = table.copy()
+    frame["_positive_net_worth"] = frame["faustmann_ratio"] > 0
+    frame["_faustmann"] = frame["faustmann_ratio"].where(frame["_positive_net_worth"], float("inf"))
+    ranked = frame.sort_values(
+        ["_positive_net_worth", "roic", "_faustmann"],
+        ascending=[False, False, True],
+        na_position="last",
+    )
+    ranked = ranked.drop(columns=["_positive_net_worth", "_faustmann"]).reset_index(drop=True)
     ranked["rank"] = range(1, len(ranked) + 1)
     return ranked
 
 
-def pick_siegfrieds(
-    table: pd.DataFrame,
-    top_n: int = DEFAULT_TOP_N,
-    min_roic: float = DEFAULT_MIN_ROIC,
-) -> pd.DataFrame:
-    """Top ``top_n`` picks: the first ``top_n`` ranks of the Siegfried ranking.
+def pick_siegfrieds(table: pd.DataFrame, top_n: int = DEFAULT_TOP_N) -> pd.DataFrame:
+    """Top ``top_n`` of the ranked universe — the highlighted, invested-in slice."""
+    return rank_siegfrieds(table).head(max(0, top_n))
 
-    Fewer survivors than ``top_n`` yields just the survivors — the bar is
-    never lowered to fill the slate.
-    """
-    return rank_siegfrieds(table, min_roic=min_roic).head(max(0, top_n))
+
+def reason_for(roic: Optional[float], faustmann: Optional[float], min_roic: float, picked: bool) -> str:
+    """One-line reason for a row's standing under the two-pronged screen."""
+    bar = f"{min_roic:.0%}"
+    if roic is None or pd.isna(roic):
+        return "missing ROIC data"
+    if faustmann is None or pd.isna(faustmann):
+        return "missing Faustmann data"
+    if faustmann <= 0:
+        return "non-positive net worth — not a low-Faustmann pick"
+    above = roic >= min_roic
+    status = "above" if above else "below"
+    if picked:
+        return f"ROIC {roic:.0%} {status} {bar} bar, low Faustmann {faustmann:.1f}"
+    return f"ROIC {roic:.0%} {status} {bar} bar"
+
+
+def annotate(table: pd.DataFrame, top_n: int, min_roic: float) -> List[dict]:
+    """Per-row annotations (rank, picked, reason) in final row order."""
+    ranked = rank_siegfrieds(table, min_roic=min_roic)
+    out = []
+    for _, row in ranked.iterrows():
+        rank = int(row["rank"])
+        out.append(
+            {
+                "ticker": row["ticker"],
+                "rank": rank,
+                "picked": rank <= top_n,
+                "reason": reason_for(row["roic"], row["faustmann_ratio"], min_roic, rank <= top_n),
+            }
+        )
+    return out
 
 
 def _cell(text: str, style_name: Optional[str] = None):
@@ -87,6 +135,13 @@ def _row_texts(row) -> list:
     return [str(p) for c in row.getElementsByType(TableCell) for p in c.getElementsByType(P)]
 
 
+def _cell_text(cell) -> str:
+    from odf.text import P
+
+    texts = [str(p) for p in cell.getElementsByType(P)]
+    return texts[0] if texts else ""
+
+
 def _set_text(cell, text: str) -> None:
     from odf.text import P
 
@@ -95,8 +150,24 @@ def _set_text(cell, text: str) -> None:
     cell.addElement(P(text=text))
 
 
-def update_ods(path: str, ranks: dict, picks: set) -> None:
-    """In-place .ods update: rank/pick columns, gold pick rows, picks-first row order."""
+def _set_formula(cell, ref_a: str, ref_b: str, divisor_text: str) -> None:
+    """Turn a cell into ``of:=ref_a/ref_b`` when the divisor is a finite number.
+
+    The cached text stays, so ``read_table`` still parses the number;
+    LibreOffice recalcs from the formula on open.
+    """
+    try:
+        divisor = float(divisor_text.strip().replace(",", ""))
+    except ValueError:
+        return
+    if not math.isfinite(divisor):
+        return
+    cell.setAttribute("formula", f"of:={ref_a}/{ref_b}")
+    cell.setAttribute("valuetype", "float")
+
+
+def update_ods(path: str, annotations: List[dict], top_n: int) -> None:
+    """In-place .ods update: rank/pick/reason columns, gold picks, picks-first order, live formulas."""
     from odf.opendocument import load
     from odf.style import Style, TableCellProperties, TextProperties
     from odf.table import Table, TableCell, TableRow
@@ -105,7 +176,7 @@ def update_ods(path: str, ranks: dict, picks: set) -> None:
     table = doc.spreadsheet.getElementsByType(Table)[0]
     rows = table.getElementsByType(TableRow)
 
-    existing = [s for s in doc.automaticstyles.getElementsByType(Style)]
+    existing = doc.automaticstyles.getElementsByType(Style)
     if not any(s.getAttribute("name") == GOLD_STYLE for s in existing):
         gold = Style(name=GOLD_STYLE, family="table-cell")
         gold.addElement(TableCellProperties(backgroundcolor=GOLD_BACKGROUND))
@@ -113,39 +184,51 @@ def update_ods(path: str, ranks: dict, picks: set) -> None:
         doc.automaticstyles.addElement(gold)
 
     header = _row_texts(rows[0])
-    if RANK_COLUMN in header:
-        rank_idx = header.index(RANK_COLUMN)
-    else:
-        rank_idx = len(header)
+    rank_idx = header.index(RANK_COLUMN) if RANK_COLUMN in header else len(header)
+    if RANK_COLUMN not in header:
         rows[0].addElement(_cell(RANK_COLUMN, "header"))
+    if PICK_COLUMN not in header:
         rows[0].addElement(_cell(PICK_COLUMN, "header"))
+    if REASON_COLUMN not in header:
+        rows[0].addElement(_cell(REASON_COLUMN, "header"))
 
+    by_ticker = {a["ticker"]: a for a in annotations}
     annotated = []
     for position, row in enumerate(rows[1:]):
         texts = _row_texts(row)
         ticker = texts[0] if texts else ""
-        rank = ranks.get(ticker)
+        info = by_ticker.get(ticker)
+        rank = info["rank"] if info else None
+        picked = bool(info["picked"]) if info else False
+        reason = info["reason"] if info else ""
         cells = row.getElementsByType(TableCell)
-        while len(cells) <= rank_idx + 1:
+        while len(cells) <= rank_idx + 2:
             row.addElement(_cell("-"))
             cells = row.getElementsByType(TableCell)
         _set_text(cells[rank_idx], str(rank) if rank else "-")
-        _set_text(cells[rank_idx + 1], "YES" if ticker in picks else "-")
-        if ticker in picks:
+        _set_text(cells[rank_idx + 1], "YES" if picked else "-")
+        _set_text(cells[rank_idx + 2], reason or "-")
+        if picked:
             for cell in row.getElementsByType(TableCell):
                 cell.setAttribute("stylename", GOLD_STYLE)
-        annotated.append((rank, position, row))
+        annotated.append((rank or 10**9, position, row))
 
-    ordered = sorted(annotated, key=lambda item: (item[0] is None, item[0] or 0, item[1]))
+    ordered = sorted(annotated, key=lambda item: (item[0], item[1]))
     for row in rows[1:]:
         table.removeChild(row)
     for _, _, row in ordered:
         table.addElement(row)
+
+    for sheet_row, (_, _, row) in enumerate(ordered, start=2):
+        cells = row.getElementsByType(TableCell)
+        if len(cells) > FAUSTMANN_COLUMN:
+            _set_formula(cells[ROIC_COLUMN], f"B{sheet_row}", f"C{sheet_row}", _cell_text(cells[2]))
+            _set_formula(cells[FAUSTMANN_COLUMN], f"E{sheet_row}", f"I{sheet_row}", _cell_text(cells[8]))
     doc.save(path)
 
 
-def update_xlsx(path: str, ranks: dict, picks: set) -> None:
-    """In-place .xlsx update: rank/pick columns, gold pick rows, picks-first row order."""
+def update_xlsx(path: str, annotations: List[dict], top_n: int) -> None:
+    """In-place .xlsx update: rank/pick/reason columns, gold picks, picks-first order (literal values)."""
     from copy import copy
 
     import openpyxl
@@ -154,31 +237,43 @@ def update_xlsx(path: str, ranks: dict, picks: set) -> None:
     wb = openpyxl.load_workbook(path)
     ws = wb.active
     headers = {ws.cell(row=1, column=c).value: c for c in range(1, ws.max_column + 1)}
-    if RANK_COLUMN in headers:
-        rank_col, pick_col = headers[RANK_COLUMN], headers[PICK_COLUMN]
-    else:
-        rank_col, pick_col = ws.max_column + 1, ws.max_column + 2
+    existing = [headers.get(name) for name in (RANK_COLUMN, PICK_COLUMN, REASON_COLUMN)]
+    next_free = max(c for c in existing if c is not None) + 1 if any(existing) else ws.max_column + 1
+    rank_col, pick_col, reason_col = existing
+    if rank_col is None:
+        rank_col = next_free
+        next_free += 1
         ws.cell(row=1, column=rank_col, value=RANK_COLUMN)
+    if pick_col is None:
+        pick_col = next_free
+        next_free += 1
         ws.cell(row=1, column=pick_col, value=PICK_COLUMN)
+    if reason_col is None:
+        reason_col = next_free
+        ws.cell(row=1, column=reason_col, value=REASON_COLUMN)
 
     gold = PatternFill("solid", fgColor="FFD966")
+    by_ticker = {a["ticker"]: a for a in annotations}
     snapshots = []
     for row_idx in range(2, ws.max_row + 1):
         ticker = str(ws.cell(row=row_idx, column=1).value or "").strip()
-        rank = ranks.get(ticker)
+        info = by_ticker.get(ticker)
+        rank = info["rank"] if info else None
+        picked = bool(info["picked"]) if info else False
         ws.cell(row=row_idx, column=rank_col, value=rank if rank else "-")
-        ws.cell(row=row_idx, column=pick_col, value="YES" if ticker in picks else "-")
-        if ticker in picks:
-            for col_idx in range(1, pick_col + 1):
+        ws.cell(row=row_idx, column=pick_col, value="YES" if picked else "-")
+        ws.cell(row=row_idx, column=reason_col, value=(info["reason"] if info else "") or "-")
+        if picked:
+            for col_idx in range(1, reason_col + 1):
                 ws.cell(row=row_idx, column=col_idx).fill = gold
             ws.cell(row=row_idx, column=1).font = Font(bold=True)
         cells = [
             (ws.cell(row=row_idx, column=c).value, copy(ws.cell(row=row_idx, column=c)._style))
-            for c in range(1, pick_col + 1)
+            for c in range(1, reason_col + 1)
         ]
-        snapshots.append((rank, row_idx, cells))
+        snapshots.append((rank or 10**9, row_idx, cells))
 
-    ordered = sorted(snapshots, key=lambda snap: (snap[0] is None, snap[0] or 0, snap[1]))
+    ordered = sorted(snapshots, key=lambda snap: (snap[0], snap[1]))
     for new_row, (_, _, cells) in enumerate(ordered, start=2):
         for col_idx, (value, style) in enumerate(cells, start=1):
             cell = ws.cell(row=new_row, column=col_idx, value=value)
@@ -186,12 +281,12 @@ def update_xlsx(path: str, ranks: dict, picks: set) -> None:
     wb.save(path)
 
 
-def update_workbook(path: str, ranks: dict, picks: set) -> None:
+def update_workbook(path: str, annotations: List[dict], top_n: int) -> None:
     """In-place update of a siegfried workbook (.ods or .xlsx), by extension."""
     if path.lower().endswith(".ods"):
-        update_ods(path, ranks, picks)
+        update_ods(path, annotations, top_n)
     else:
-        update_xlsx(path, ranks, picks)
+        update_xlsx(path, annotations, top_n)
 
 
 def _fmt_pct(value: Optional[float]) -> str:
@@ -204,33 +299,31 @@ def _fmt_ratio(value: Optional[float]) -> str:
 
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Siegfried picker: high-ROIC, low-Faustmann-ratio top slice (Dao of Capital ch. 10)"
+        description="Siegfried picker: rank the whole workbook by Spitznagel's ch. 10 criteria, pick the top slice"
     )
     parser.add_argument("workbook", help="siegfried workbook (.ods or .xlsx) from roic_faustmann")
-    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N, help="number of picks (default 10)")
-    parser.add_argument("--min-roic", type=float, default=DEFAULT_MIN_ROIC, help="minimum ROIC bar (default 0.75)")
+    parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N, help="number of picks to highlight (default 10)")
+    parser.add_argument("--min-roic", type=float, default=DEFAULT_MIN_ROIC, help="ROIC bar for the reason text (default 0.75)")
     args = parser.parse_args(argv)
 
     table = read_table(args.workbook)
-    ranked = rank_siegfrieds(table, min_roic=args.min_roic)
-    picks = pick_siegfrieds(table, top_n=args.top_n, min_roic=args.min_roic)
+    annotations = annotate(table, top_n=args.top_n, min_roic=args.min_roic)
+    picks = [a for a in annotations if a["picked"]]
 
-    print(f"universe : {len(table)} tickers")
-    print(f"survivors: {len(ranked)} with ROIC >= {args.min_roic:.0%} and positive net worth")
-    if ranked.empty:
-        print("no Siegfrieds at this bar — workbook left untouched")
-        return 1
-
-    print(f"picks    : top {args.top_n} by lowest Faustmann ratio")
-    for _, row in picks.iterrows():
+    print(f"universe : {len(table)} tickers, ranked by Spitznagel's criteria (ROIC desc, Faustmann asc)")
+    print(f"picks    : top {args.top_n} highlighted")
+    for a in picks:
+        row = table[table["ticker"] == a["ticker"]].iloc[0]
         print(
-            f"  {int(row['rank']):>2}. {row['ticker']:<6} ROIC {_fmt_pct(row['roic']):>7}"
-            f"  Faustmann {_fmt_ratio(row['faustmann_ratio']):>8}"
+            f"  {a['rank']:>3}. {a['ticker']:<6} ROIC {_fmt_pct(row['roic']):>7}"
+            f"  Faustmann {_fmt_ratio(row['faustmann_ratio']):>8}  {a['reason']}"
         )
 
-    ranks = {row["ticker"]: int(row["rank"]) for _, row in ranked.iterrows()}
-    update_workbook(args.workbook, ranks, set(picks["ticker"]))
-    print(f"updated  : {args.workbook} (rank/pick columns, gold highlights, picks first)")
+    update_workbook(args.workbook, annotations, args.top_n)
+    print(
+        f"updated  : {args.workbook} (rank/pick/reason columns, gold top {args.top_n},"
+        " picks first, D= B/C and J = E/I live formulas)"
+    )
     return 0
 
 

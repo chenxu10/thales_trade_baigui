@@ -255,12 +255,13 @@ def read_table(path: str) -> pd.DataFrame:
     """A written siegfried workbook (.ods or .xlsx) back into a typed DataFrame.
 
     Every non-ticker column is coerced to numeric; unparseable entries (the
-    "-" placeholders written for missing values) become NaN.
+    "-" placeholders written for missing values) become NaN. Thousands
+    separators from ``format_dollars`` are stripped before coercion.
     """
     frame = _ods_table(path) if Path(path).suffix.lower() == ".ods" else pd.read_excel(path)
     for column in frame.columns:
         if str(column).strip().lower() not in TICKER_COLUMNS:
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+            frame[column] = pd.to_numeric(frame[column].astype(str).str.replace(",", ""), errors="coerce")
     return frame
 
 
