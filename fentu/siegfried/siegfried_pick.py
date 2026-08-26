@@ -24,11 +24,12 @@ Updates the workbook **in place** — no new file:
   * a "Reason" column briefly stating why each row ranks where it does,
   * gold highlighting on the picked rows,
   * rows re-sorted picks-first (rank ascending),
-  * the derived metrics as live formulas for LibreOffice: ROIC (column D)
-    as ``=B/C`` and the Faustmann ratio (column J) as ``=E/I``, so they
-    recalculate when you edit the raw EBIT / invested capital / market cap /
-    net-worth inputs. (.ods only — .xlsx keeps literal values so
-    ``read_table`` still parses numerics.)
+  * the derived Faustmann ratio (column J) as a live formula for
+    LibreOffice, ``=E/I``, so it recalculates when you edit the raw market
+    cap / net-worth inputs. (.ods only — .xlsx keeps literal values so
+    ``read_table`` still parses numerics.) The ROIC column stays a literal
+    value: it is the rolling 10-year median from ``roic_faustmann``, not a
+    single-year ``=B/C`` quotient.
 
 Running it twice is safe: existing rank/pick/reason columns are reused, not
 duplicated. Spitznagel ignores financials/banks in his own screen — do that
@@ -56,7 +57,6 @@ GOLD_STYLE = "siegfried_pick"
 GOLD_BACKGROUND = "#FFD966"
 GOLD_COLOR = "#7F6000"
 
-ROIC_COLUMN = 3  # D: derived ROIC
 FAUSTMANN_COLUMN = 9  # J: derived Faustmann ratio
 
 
@@ -90,7 +90,7 @@ def reason_for(roic: Optional[float], faustmann: Optional[float], min_roic: floa
     """One-line reason for a row's standing under the two-pronged screen."""
     bar = f"{min_roic:.0%}"
     if roic is None or pd.isna(roic):
-        return "missing ROIC data"
+        return "insufficient ROIC history (<10y)"
     if faustmann is None or pd.isna(faustmann):
         return "missing Faustmann data"
     if faustmann <= 0:
@@ -222,7 +222,6 @@ def update_ods(path: str, annotations: List[dict], top_n: int) -> None:
     for sheet_row, (_, _, row) in enumerate(ordered, start=2):
         cells = row.getElementsByType(TableCell)
         if len(cells) > FAUSTMANN_COLUMN:
-            _set_formula(cells[ROIC_COLUMN], f"B{sheet_row}", f"C{sheet_row}", _cell_text(cells[2]))
             _set_formula(cells[FAUSTMANN_COLUMN], f"E{sheet_row}", f"I{sheet_row}", _cell_text(cells[8]))
     doc.save(path)
 
@@ -322,7 +321,7 @@ def main(argv: Optional[list] = None) -> int:
     update_workbook(args.workbook, annotations, args.top_n)
     print(
         f"updated  : {args.workbook} (rank/pick/reason columns, gold top {args.top_n},"
-        " picks first, D= B/C and J = E/I live formulas)"
+        " picks first, J = E/I live formula)"
     )
     return 0
 

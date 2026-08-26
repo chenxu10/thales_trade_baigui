@@ -6,7 +6,14 @@ Definitions from Chapter Ten, "Austrian Investing II: Siegfried":
     before interest and tax expenses are deducted) by its invested capital
     (the operating capital required to generate that EBIT)."
 
-        ROIC = EBIT / invested_capital
+        annual ROIC = EBIT / invested_capital
+
+    measured as the rolling 10-year median of that annual ratio —
+    "Rolling 10-Year ROIC (Median)" (Figure 10.1), part of a "highly robust
+    screen (meaning wild numbers don't have an undue affect)". A firm with
+    fewer than ten years of paired EBIT / invested-capital history gets no
+    ROIC at all (the "-" placeholder) — never a short-window or single-year
+    stand-in.
 
     Faustmann ratio — "a low market capitalization (of common equity) over
     net worth (or invested capital plus cash minus debt and preferred equity)
@@ -25,23 +32,20 @@ any workbook from any folder), pulls the raw elements from yfinance (single
 I/O seam: ``fetch_fundamentals``), and derives ROIC, net worth, and the
 Faustmann ratio as new columns. Output format follows the input extension.
 
-.ods files written by this repo (odfpy cells carry text only, no
-``office:value`` attributes) are unreadable to pandas' odf engine, so .ods
-goes through an odfpy reader (same pattern as ``seven_traits_report``); it
-also falls back to ``office:value`` / ``office:string-value`` attributes so
-workbooks from other tools work too.
-
 Usage:
     uv run python -m fentu.siegfried.roic_faustmann data/sp500_ticker.ods
     uv run python -m fentu.siegfried.roic_faustmann data/ndx100_ticker.ods -o out.ods
     uv run python -m fentu.siegfried.roic_faustmann /any/folder/tickers.xlsx
 """
 import argparse
+import statistics
 import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import pandas as pd
+
+ROIC_WINDOW_YEARS = 10
 
 TICKER_COLUMNS = ("ticker", "tickers", "symbol", "symbols")
 
@@ -87,13 +91,39 @@ def _latest_any(statement: Optional[pd.DataFrame], rows: tuple) -> Optional[floa
     return None
 
 
+def _annual_roics(
+    income_stmt: Optional[pd.DataFrame],
+    balance_sheet: Optional[pd.DataFrame],
+) -> List[float]:
+    """Annual EBIT / invested capital per period, most recent first.
+
+    Years missing either leg, or with zero invested capital, are skipped —
+    they contribute nothing to the rolling window.
+    """
+    if income_stmt is None or income_stmt.empty or balance_sheet is None or balance_sheet.empty:
+        return []
+    if "EBIT" not in income_stmt.index or "Invested Capital" not in balance_sheet.index:
+        return []
+    roics = []
+    for period in income_stmt.columns:
+        if period not in balance_sheet.columns:
+            continue
+        ebit = income_stmt.at["EBIT", period]
+        invested = balance_sheet.at["Invested Capital", period]
+        if pd.isna(ebit) or pd.isna(invested) or not invested:
+            continue
+        roics.append(float(ebit) / float(invested))
+    return roics
+
+
 def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
     """Single I/O seam: raw ROIC / Faustmann elements for one ticker.
 
-    Pulls EBIT from the annual income statement; invested capital, cash,
-    debt, and preferred equity from the annual balance sheet; and market
-    cap from fast_info (falling back to info). Missing pieces come back as
-    None — never fabricated.
+    Pulls the full annual history from the income statement and balance
+    sheet (paired per year into annual ROICs for the rolling window); the
+    latest invested capital, cash, debt, and preferred equity from the
+    annual balance sheet; and market cap from fast_info (falling back to
+    info). Missing pieces come back as None — never fabricated.
     """
     import yfinance as yf
 
@@ -116,6 +146,7 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
         "ticker": ticker,
         "ebit": _latest(income_stmt, "EBIT"),
         "invested_capital": _latest(balance_sheet, "Invested Capital"),
+        "roic_history": _annual_roics(income_stmt, balance_sheet),
         "market_cap": None if market_cap is None else float(market_cap),
         "cash": _latest_any(balance_sheet, CASH_ROWS),
         "debt": _latest(balance_sheet, "Total Debt"),
@@ -123,11 +154,18 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
     }
 
 
-def derive_roic(ebit: Optional[float], invested_capital: Optional[float]) -> Optional[float]:
-    """ROIC = EBIT / invested capital; None when either leg is missing or non-positive."""
-    if ebit is None or not invested_capital:
+def derive_roic(roic_history: Optional[List[float]], window: int = ROIC_WINDOW_YEARS) -> Optional[float]:
+    """Rolling 10-year ROIC (median): the median of the trailing ``window``
+    annual ROICs, history ordered most recent first.
+
+    Fewer than ``window`` years of history is not enough data — None (the
+    "-" placeholder), never a short-window or single-year stand-in. The
+    median (not the mean) keeps the screen "highly robust", so "wild numbers
+    don't have an undue affect" (Spitznagel, ch. 10).
+    """
+    if not roic_history or len(roic_history) < window:
         return None
-    return ebit / invested_capital
+    return statistics.median(roic_history[:window])
 
 
 def derive_net_worth(
@@ -170,7 +208,7 @@ def build_table(
                 "ticker": raw.get("ticker", ticker),
                 "ebit": raw.get("ebit"),
                 "invested_capital": raw.get("invested_capital"),
-                "roic": derive_roic(raw.get("ebit"), raw.get("invested_capital")),
+                "roic": derive_roic(raw.get("roic_history")),
                 "market_cap": raw.get("market_cap"),
                 "cash": raw.get("cash"),
                 "debt": raw.get("debt"),
@@ -337,6 +375,9 @@ def main(argv: Optional[list] = None) -> int:
     output = args.output or default_output_path(args.excel)
     write_table(table, output)
     print(f"wrote {len(table)} rows -> {output}")
+    insufficient = int(table["roic"].isna().sum())
+    if insufficient:
+        print(f"note: {insufficient}/{len(table)} tickers lack the 10-year ROIC history (roic '-'), no single-year stand-in")
     print(table.to_string(index=False))
     return 0
 

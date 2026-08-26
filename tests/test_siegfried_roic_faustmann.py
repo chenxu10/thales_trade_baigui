@@ -2,7 +2,9 @@
 Siegfried screen — ROIC and Faustmann ratio derivations (Dao of Capital ch. 10).
 
 Covered behaviors:
-    1. ROIC = EBIT / invested capital, exactly as Spitznagel defines it.
+    1. ROIC is the rolling 10-year median of annual EBIT / invested
+       capital ratios (Dao of Capital ch. 10, Figure 10.1); fewer than ten
+       years of history yields None — never a single-year stand-in.
     2. Net worth = invested capital + cash - debt - preferred equity; missing
        cash/debt/preferred lines count as zero, missing invested capital -> None.
     3. Faustmann ratio = market cap / net worth; missing or non-positive
@@ -19,6 +21,7 @@ import pandas as pd
 import pytest
 
 from fentu.siegfried.roic_faustmann import (
+    _annual_roics,
     build_table,
     default_output_path,
     derive_faustmann_ratio,
@@ -28,15 +31,50 @@ from fentu.siegfried.roic_faustmann import (
     write_table,
 )
 
-
-def test_roic_is_ebit_over_invested_capital():
-    assert derive_roic(ebit=2_000_000, invested_capital=10_000_000) == pytest.approx(0.20)
+HISTORY_020 = [0.20] * 10
 
 
-def test_roic_none_when_ebit_missing_or_capital_zero():
-    assert derive_roic(ebit=None, invested_capital=10_000_000) is None
-    assert derive_roic(ebit=1_000_000, invested_capital=None) is None
-    assert derive_roic(ebit=1_000_000, invested_capital=0) is None
+def test_roic_is_rolling_ten_year_median():
+    assert derive_roic(HISTORY_020) == pytest.approx(0.20)
+
+
+def test_roic_median_tames_wild_numbers():
+    assert derive_roic([0.20] * 9 + [40.0]) == pytest.approx(0.20)
+
+
+def test_roic_uses_only_the_ten_most_recent_years():
+    assert derive_roic([0.20] * 10 + [9.99] * 5) == pytest.approx(0.20)
+
+
+def test_roic_none_when_history_shorter_than_ten_years():
+    assert derive_roic([0.20] * 9) is None
+    assert derive_roic([]) is None
+    assert derive_roic(None) is None
+
+
+def _statement(row: str, values: list) -> pd.DataFrame:
+    """A one-row yfinance-style statement: periods as columns, most recent first."""
+    return pd.DataFrame(
+        [values], columns=[f"Y{i}" for i in range(len(values))], index=[row]
+    )
+
+
+def test_annual_roics_pairs_years_and_skips_incomplete_ones():
+    income = _statement("EBIT", [2_000_000, 3_000_000, 1_000_000])
+    balance = _statement("Invested Capital", [10_000_000, float("nan"), 0.0])
+    assert _annual_roics(income, balance) == pytest.approx([0.20])
+
+
+def test_annual_roics_skips_years_without_both_legs():
+    income = _statement("EBIT", [2.0, 4.0])
+    balance = _statement("Invested Capital", [10.0])
+    assert _annual_roics(income, balance) == pytest.approx([0.20])
+
+
+def test_annual_roics_empty_when_statements_or_rows_missing():
+    assert _annual_roics(None, None) == []
+    assert _annual_roics(pd.DataFrame(), pd.DataFrame()) == []
+    assert _annual_roics(_statement("EBIT", [1.0]), _statement("Total Assets", [1.0])) == []
 
 
 def test_net_worth_formula():
@@ -66,6 +104,7 @@ def test_build_table_derives_columns_from_injected_fetch():
         "ticker": t,
         "ebit": 2_000_000,
         "invested_capital": 10_000_000,
+        "roic_history": HISTORY_020,
         "market_cap": 18_500_000,
         "cash": 500_000,
         "debt": 1_000_000,
@@ -78,6 +117,24 @@ def test_build_table_derives_columns_from_injected_fetch():
     assert row["roic"] == pytest.approx(0.20)
     assert row["net_worth"] == pytest.approx(9_250_000)
     assert row["faustmann_ratio"] == pytest.approx(2.0)
+
+
+def test_build_table_placeholder_roic_when_history_is_short():
+    fetch = lambda t: {
+        "ticker": t,
+        "ebit": 2_000_000,
+        "invested_capital": 10_000_000,
+        "roic_history": [0.20] * 9,
+        "market_cap": 18_500_000,
+        "cash": 500_000,
+        "debt": 1_000_000,
+        "preferred_equity": 250_000,
+    }
+    table = build_table(["VRTX"], fetch=fetch)
+
+    row = table.iloc[0]
+    assert pd.isna(row["roic"])  # "-" placeholder, never the single-year 0.20
+    assert row["net_worth"] == pytest.approx(9_250_000)
 
 
 def test_build_table_keeps_raw_elements_and_handles_missing_data():
@@ -150,6 +207,7 @@ def test_write_table_ods_round_trips_through_reader(tmp_path):
             "ticker": t,
             "ebit": 2_000_000,
             "invested_capital": 10_000_000,
+            "roic_history": HISTORY_020,
             "market_cap": 18_500_000,
             "cash": 500_000,
             "debt": 1_000_000,

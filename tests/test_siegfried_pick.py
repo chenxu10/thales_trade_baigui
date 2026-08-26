@@ -11,9 +11,11 @@ Covered behaviors:
        or below the ROIC bar, low Faustmann, or non-positive net worth.
     4. In-place update: rank/pick/reason columns appear, picked rows are
        re-sorted to the top, and running the update twice reuses the columns.
-    5. Live formulas: ROIC (D) and Faustmann ratio (J) become ``of:=B/C`` /
-       ``of:=E/I`` in .ods when the divisor is a finite number; .xlsx keeps
-       literal values so read_table still parses numerics.
+    5. Live formulas: the Faustmann ratio (J) becomes ``of:=E/I`` in .ods
+        when the divisor is a finite number; the ROIC column (D) stays a
+        literal rolling 10-year median, never a single-year ``=B/C``
+        quotient. .xlsx keeps literal values so read_table still parses
+        numerics.
     6. read_table round-trips roic_faustmann output for both .ods and .xlsx.
 
 Network-free: tables are built inline or round-tripped through tmp files.
@@ -94,7 +96,7 @@ def test_reason_for_above_and_below_bar():
     assert reason_for(0.80, 1.5, 0.75, picked=True) == "ROIC 80% above 75% bar, low Faustmann 1.5"
     assert reason_for(0.60, 1.5, 0.75, picked=False) == "ROIC 60% below 75% bar"
     assert reason_for(0.95, -2.0, 0.75, picked=False) == "non-positive net worth — not a low-Faustmann pick"
-    assert reason_for(None, 1.5, 0.75, picked=False) == "missing ROIC data"
+    assert reason_for(None, 1.5, 0.75, picked=False) == "insufficient ROIC history (<10y)"
 
 
 def test_annotate_orders_and_reasons_every_row():
@@ -203,7 +205,7 @@ def _metric_table():
     ).reindex(columns=OUTPUT_COLUMNS)
 
 
-def test_update_ods_writes_live_formulas_for_roic_and_faustmann(tmp_path):
+def test_update_ods_writes_live_formula_for_faustmann_only(tmp_path):
     from odf.table import TableCell
 
     table = _metric_table()
@@ -219,9 +221,9 @@ def test_update_ods_writes_live_formulas_for_roic_and_faustmann(tmp_path):
     first = rows[1].getElementsByType(TableCell)  # DEF: rank 1 (ROIC 0.25)
     second = rows[2].getElementsByType(TableCell)
 
-    assert first[3].getAttribute("formula") == "of:=B2/C2"  # D = roic
+    assert first[3].getAttribute("formula") is None  # D: rolling 10-year median, not =B/C
     assert first[9].getAttribute("formula") == "of:=E2/I2"  # J = faustmann ratio
-    assert second[3].getAttribute("formula") == "of:=B3/C3"
+    assert second[3].getAttribute("formula") is None
     assert second[9].getAttribute("formula") == "of:=E3/I3"
 
 
