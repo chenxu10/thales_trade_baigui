@@ -57,26 +57,22 @@ def fetch_index_pairs(url: str, ticker_col: str, name_col: str) -> List[Tuple[st
 
     for table in soup.find_all("table"):
         rows = table.find_all("tr")
-        if not rows:
-            continue
-        header = [_normalize(th.get_text(" ", strip=True)) for th in rows[0].find_all("th")]
-        if ticker_col not in header or name_col not in header:
-            continue
-        ticker_index = header.index(ticker_col)
-        name_index = header.index(name_col)
-        pairs: List[Tuple[str, str]] = []
-        seen = set()
-        for row in rows[1:]:
-            cells = [_normalize(td.get_text(" ", strip=True)) for td in row.find_all(["td", "th"])]
-            if len(cells) <= max(ticker_index, name_index):
-                continue
-            ticker = cells[ticker_index]
-            if not ticker or ticker in seen:
-                continue
-            seen.add(ticker)
-            pairs.append((ticker, cells[name_index]))
-        if pairs:
-            return pairs
+        if rows:
+            header = [_normalize(th.get_text(" ", strip=True)) for th in rows[0].find_all("th")]
+            if ticker_col in header and name_col in header:
+                ticker_index = header.index(ticker_col)
+                name_index = header.index(name_col)
+                pairs: List[Tuple[str, str]] = []
+                seen = set()
+                for row in rows[1:]:
+                    cells = [_normalize(td.get_text(" ", strip=True)) for td in row.find_all(["td", "th"])]
+                    if len(cells) > max(ticker_index, name_index):
+                        ticker = cells[ticker_index]
+                        if ticker and ticker not in seen:
+                            seen.add(ticker)
+                            pairs.append((ticker, cells[name_index]))
+                if pairs:
+                    return pairs
     raise ValueError(f"no table with columns {ticker_col!r}/{name_col!r} at {url}")
 
 

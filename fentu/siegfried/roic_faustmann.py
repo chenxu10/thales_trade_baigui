@@ -105,14 +105,11 @@ def _annual_roics(
     if "EBIT" not in income_stmt.index or "Invested Capital" not in balance_sheet.index:
         return []
     roics = []
-    for period in income_stmt.columns:
-        if period not in balance_sheet.columns:
-            continue
+    for period in income_stmt.columns.intersection(balance_sheet.columns):
         ebit = income_stmt.at["EBIT", period]
         invested = balance_sheet.at["Invested Capital", period]
-        if pd.isna(ebit) or pd.isna(invested) or not invested:
-            continue
-        roics.append(float(ebit) / float(invested))
+        if not pd.isna(ebit) and not pd.isna(invested) and invested:
+            roics.append(float(ebit) / float(invested))
     return roics
 
 

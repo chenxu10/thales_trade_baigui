@@ -76,12 +76,11 @@ def format_ods(path: str, columns: List[str]) -> int:
     for row in rows[1:]:
         cells = row.getElementsByType(TableCell)
         for index in indices:
-            if index >= len(cells):
-                continue
-            text = _dollar_text(_cell_text(cells[index]))
-            if text is not None:
-                _set_text(cells[index], text)
-                formatted += 1
+            if index < len(cells):
+                text = _dollar_text(_cell_text(cells[index]))
+                if text is not None:
+                    _set_text(cells[index], text)
+                    formatted += 1
     doc.save(path)
     return formatted
 

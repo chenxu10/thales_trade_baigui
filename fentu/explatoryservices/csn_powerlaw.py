@@ -78,11 +78,10 @@ def select_xmin_continuous(data: np.ndarray):
     for xm in _xmin_candidates(data):
         tail = data[data >= xm]
         a = mle_alpha_continuous(tail, float(xm))
-        if not np.isfinite(a) or a <= 1.0:
-            continue
-        d = ks_distance_continuous(tail, float(xm), a)
-        if d < best[0]:
-            best = (d, float(xm), float(a), len(tail))
+        if np.isfinite(a) and a > 1.0:
+            d = ks_distance_continuous(tail, float(xm), a)
+            if d < best[0]:
+                best = (d, float(xm), float(a), len(tail))
     if best[1] is None:
         return None, None, None, 0
     return best[1], best[2], best[0], best[3]
@@ -100,9 +99,7 @@ def _bootstrap_pvalue(d_obs, x_min, alpha, n_tail, B, rng) -> float:
     for _ in range(B):
         synth = _continuous_pl_samples(alpha, x_min, n_tail, rng)
         _, _, D_s, _ = select_xmin_continuous(synth)
-        if D_s is None:
-            continue
-        if D_s >= d_obs:
+        if D_s is not None and D_s >= d_obs:
             count += 1
     return (count + 1) / (B + 1)
 

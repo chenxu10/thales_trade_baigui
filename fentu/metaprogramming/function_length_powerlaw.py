@@ -214,14 +214,12 @@ def select_xmin(data: np.ndarray):
     for xm in np.unique(data):
         tail = data[data >= xm]
         n = len(tail)
-        if n < 2:
-            continue
-        a = mle_alpha(tail, int(xm))
-        if not np.isfinite(a) or a <= 1.0:
-            continue
-        d = ks_distance(tail, int(xm), a)
-        if d < best[0]:
-            best = (d, int(xm), float(a), n)
+        if n >= 2:
+            a = mle_alpha(tail, int(xm))
+            if np.isfinite(a) and a > 1.0:
+                d = ks_distance(tail, int(xm), a)
+                if d < best[0]:
+                    best = (d, int(xm), float(a), n)
     if best[1] is None:
         return None, None, None, 0
     return best[1], best[2], best[0], best[3]
@@ -252,9 +250,7 @@ def _bootstrap_pvalue(data, x_min, alpha, n_tail, B, rng) -> float:
     for _ in range(B):
         synth = _discrete_pl_samples(alpha, x_min, n_tail, rng)
         _, _, D_s, _ = select_xmin(synth)
-        if D_s is None:
-            continue
-        if D_s >= D_obs:
+        if D_s is not None and D_s >= D_obs:
             count += 1
     return (count + 1) / (B + 1)
 
