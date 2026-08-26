@@ -73,7 +73,7 @@ Topology Diagram (ASCII)
  |                                                                           |
  |  [Volatility]    calculate_daily_volatility() -> DailyVolatility          |
  |  [Extreme]       find_negative/positive_extreme_returns(k|threshold)      |
- |  [Visualization] visualize_percentage_change(period, tail_percent)        |
+  |  [Visualization] visualize_percentage_change(period)                      |
  |     +-> _prepare_percentage_change_data() (data view-model)               |
  |     +-> _plot_percentage_change()                                         |
  |           +-> ps.qq_plot / ps.histgram_plot / spl.plot_loglog_with_fit    |
@@ -435,14 +435,13 @@ class VolatilityFacade:
             'instrument': self.instrument,
         }
 
-    def _plot_tail_fits(self, tails, axes, tail_percent):
+    def _plot_tail_fits(self, tails, axes):
         """Render left/right tail log-log fits onto the two bottom-row axes."""
         for tail, ax in zip(tails, axes):
             if tail['x_min'] is not None:
                 spl.plot_loglog_with_fit(
                     tail['data'], tail['x_min'], ax=ax,
                     title=tail['title'],
-                    tail_percent=tail_percent
                 )
 
     def _build_percentage_change_figure_layout(self):
@@ -464,7 +463,7 @@ class VolatilityFacade:
         ax_vix = fig.add_subplot(gs[2, :])
         return fig, ax_qq, ax_hist, ax_left, ax_right, ax_vix
 
-    def _plot_percentage_change(self, data, tail_percent):
+    def _plot_percentage_change(self, data):
         """
         Plot percentage change visualizations.
 
@@ -473,29 +472,28 @@ class VolatilityFacade:
 
         Args:
             data: dict from _prepare_percentage_change_data
-            tail_percent: Fraction of extreme tail to fit for alpha estimation
         """
         fig, ax_qq, ax_hist, ax_left, ax_right, ax_vix = self._build_percentage_change_figure_layout()
 
         ps.qq_plot(data['returns'], ax=ax_qq, show=False)
         ps.histgram_plot(data['returns'], ax=ax_hist, show=False)
-        self._plot_tail_fits(data['tails'], [ax_left, ax_right], tail_percent)
+        self._plot_tail_fits(data['tails'], [ax_left, ax_right])
         self._plot_vix_panel(ax_vix)
 
         fig.suptitle(f"{data['instrument']} {data['period'].capitalize()} Returns")
         plt.show()
 
-    def visualize_percentage_change(self, period='daily', tail_percent=0.10):
+    def visualize_percentage_change(self, period='daily'):
         """
         Visualize percentage changes for a specific period using QQ plot, histogram,
-        and log-log plots for left and right tail analysis.
+        and log-log plots for left and right tail analysis. Tail alpha is
+        estimated by the CSN (2009) fitter (MLE + KS-selected x_min).
 
         Args:
             period: str, one of 'daily', 'weekly', 'monthly', 'yearly'
-            tail_percent: Fraction of extreme tail to fit for alpha estimation (default 0.1)
         """
         data = self._prepare_percentage_change_data(period)
-        self._plot_percentage_change(data, tail_percent)
+        self._plot_percentage_change(data)
 
     def _find_extreme_returns(self, period='daily', k=None, threshold=None, side='negative'):
         """
