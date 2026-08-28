@@ -216,12 +216,8 @@ def roic_breakdown(pairs: List[tuple], window: int = ROIC_WINDOW_YEARS):
     Mirrors ``derive_roic``: fewer than ``window`` years yields the whole
     history and None — the "-" placeholder — never a short-window median.
     """
-    if not pairs:
-        return [], None
     windowed = pairs[:window]
-    if len(windowed) < window:
-        return windowed, None
-    return windowed, statistics.median(roic for _, roic in windowed)
+    return windowed, derive_roic([roic for _, roic in windowed], window)
 
 
 def print_roic_history(ticker: str, pairs: List[tuple]) -> None:
@@ -316,31 +312,37 @@ def _ods_cell_text(cell) -> str:
     return ""
 
 
-def _ods_reader(path: str) -> List[str]:
-    """Ticker list from an .ods workbook via odfpy (repo writer emits no office:value attrs)."""
+def _ods_rows(path: str) -> tuple:
+    """(header cell texts, remaining rows' cell-text lists) from an .ods spreadsheet."""
     from odf.opendocument import load
     from odf.table import TableCell, TableRow
 
-    doc = load(path)
-    rows = doc.spreadsheet.getElementsByType(TableRow)
+    rows = load(path).spreadsheet.getElementsByType(TableRow)
     if not rows:
-        return []
+        return [], []
     header = [_ods_cell_text(c) for c in rows[0].getElementsByType(TableCell)]
+    body = [[_ods_cell_text(c) for c in row.getElementsByType(TableCell)] for row in rows[1:]]
+    return header, body
+
+
+def _ticker_column(lowered, default):
+    """``TICKER_COLUMNS`` name whose header key is present, else ``default``."""
+    return next((lowered[name] for name in TICKER_COLUMNS if name in lowered), default)
+
+
+def _ods_reader(path: str) -> List[str]:
+    """Ticker list from an .ods workbook via odfpy (repo writer emits no office:value attrs)."""
+    header, body = _ods_rows(path)
     lowered = {text.strip().lower(): i for i, text in enumerate(header) if text.strip()}
-    column = next((lowered[name] for name in TICKER_COLUMNS if name in lowered), 0)
-    out = []
-    for row in rows[1:]:
-        cells = [_ods_cell_text(c) for c in row.getElementsByType(TableCell)]
-        if column < len(cells) and cells[column].strip():
-            out.append(cells[column].strip())
-    return out
+    column = _ticker_column(lowered, 0)
+    return [cells[column].strip() for cells in body if column < len(cells) and cells[column].strip()]
 
 
 def _xlsx_reader(path: str) -> List[str]:
     """Ticker list from an .xlsx/.xls workbook: ticker/symbol column if present, else column one."""
     frame = pd.read_excel(path)
     lowered = {str(c).strip().lower(): c for c in frame.columns}
-    column = next((lowered[name] for name in TICKER_COLUMNS if name in lowered), frame.columns[0])
+    column = _ticker_column(lowered, frame.columns[0])
     return [str(t).strip() for t in frame[column].dropna() if str(t).strip()]
 
 
@@ -354,19 +356,10 @@ def read_tickers(path: str) -> List[str]:
 
 def _ods_table(path: str) -> pd.DataFrame:
     """Full table from an .ods workbook: first row is the header, the rest are records."""
-    from odf.opendocument import load
-    from odf.table import TableCell, TableRow
-
-    doc = load(path)
-    rows = doc.spreadsheet.getElementsByType(TableRow)
-    if not rows:
+    header, body = _ods_rows(path)
+    if not header:
         return pd.DataFrame()
-    header = [_ods_cell_text(c) for c in rows[0].getElementsByType(TableCell)]
-    records = []
-    for row in rows[1:]:
-        cells = [_ods_cell_text(c) for c in row.getElementsByType(TableCell)]
-        cells = (cells + [""] * len(header))[: len(header)]
-        records.append(cells)
+    records = [(cells + [""] * len(header))[: len(header)] for cells in body]
     return pd.DataFrame(records, columns=header)
 
 
