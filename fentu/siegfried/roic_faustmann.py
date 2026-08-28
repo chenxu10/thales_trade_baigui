@@ -8,13 +8,6 @@ Definitions from Chapter Ten, "Austrian Investing II: Siegfried":
 
         annual ROIC = EBIT / invested_capital
 
-    measured as the rolling 10-year median of that annual ratio —
-    "Rolling 10-Year ROIC (Median)" (Figure 10.1), part of a "highly robust
-    screen (meaning wild numbers don't have an undue affect)". A firm with
-    fewer than ten years of paired EBIT / invested-capital history gets no
-    ROIC at all (the "-" placeholder) — never a short-window or single-year
-    stand-in.
-
     Faustmann ratio — "a low market capitalization (of common equity) over
     net worth (or invested capital plus cash minus debt and preferred equity)
     ratio."
@@ -23,19 +16,21 @@ Definitions from Chapter Ten, "Austrian Investing II: Siegfried":
         faustmann_ratio = market_cap / net_worth
 
 The two-pronged screen: high ROIC flags roundabout, productive firms; a low
-Faustmann ratio flags those the market underappreciates. Neither suffices in
-isolation. (Spitznagel ignores financials/banks in his own toy screen.)
+Faustmann ratio flags those the market underappreciates. 
 
 This module reads a ticker list from an .ods or .xlsx/.xls workbook (e.g. the
 repo's ``data/sp500_ticker.ods`` / ``data/ndx100_ticker.ods`` universes, or
-any workbook from any folder), pulls the raw elements from yfinance (single
-I/O seam: ``fetch_fundamentals``), and derives ROIC, net worth, and the
+any workbook from any folder) and derives ROIC, net worth, and the
 Faustmann ratio as new columns. Output format follows the input extension.
+
+The ROIC history is backfilled from SEC EDGAR XBRL (see
+``edgar_fundamentals``): yfinance annual statements reach only ~4 years back,
+while EDGAR companyfacts carry 10+ years of the same 10-K facts.
 
 Usage:
     uv run python -m fentu.siegfried.roic_faustmann data/sp500_ticker.ods
+    It reads the ticker list from it and writes a new file data/sp500_ticker_siegfried.ods (same folder, same extension, _siegfried suffix
     uv run python -m fentu.siegfried.roic_faustmann data/ndx100_ticker.ods -o out.ods
-    uv run python -m fentu.siegfried.roic_faustmann /any/folder/tickers.xlsx
 """
 import argparse
 import statistics
@@ -45,7 +40,11 @@ from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 
+from fentu.siegfried import edgar_fundamentals
+
 ROIC_WINDOW_YEARS = 10
+
+EDGAR_CACHE_DIR = str(Path(__file__).resolve().parents[2] / "data" / "edgar_cache")
 
 TICKER_COLUMNS = ("ticker", "tickers", "symbol", "symbols")
 
@@ -91,11 +90,11 @@ def _latest_any(statement: Optional[pd.DataFrame], rows: tuple) -> Optional[floa
     return None
 
 
-def _annual_roics(
+def _annual_roic_pairs(
     income_stmt: Optional[pd.DataFrame],
     balance_sheet: Optional[pd.DataFrame],
-) -> List[float]:
-    """Annual EBIT / invested capital per period, most recent first.
+) -> List[tuple]:
+    """(period, annual EBIT / invested capital) pairs, most recent first.
 
     Years missing either leg, or with zero invested capital, are skipped —
     they contribute nothing to the rolling window.
@@ -104,29 +103,51 @@ def _annual_roics(
         return []
     if "EBIT" not in income_stmt.index or "Invested Capital" not in balance_sheet.index:
         return []
-    roics = []
+    pairs = []
     for period in income_stmt.columns.intersection(balance_sheet.columns):
         ebit = income_stmt.at["EBIT", period]
         invested = balance_sheet.at["Invested Capital", period]
         if not pd.isna(ebit) and not pd.isna(invested) and invested:
-            roics.append(float(ebit) / float(invested))
-    return roics
+            pairs.append((period, float(ebit) / float(invested)))
+    return pairs
+
+
+def _merge_roic_histories(primary: List[tuple], secondary: List[tuple]) -> List[tuple]:
+    """EDGAR (primary) wins overlapping years; yfinance fills the gaps. Newest first.
+
+    A secondary year within 185 days of a primary year is the same fiscal
+    year (the sources label the same 10-K end date, plus or minus a quarter
+    of drift) — EDGAR's value is kept. Distinct fiscal years are ~365 days
+    apart, so they never collide.
+    """
+    merged = list(primary)
+    for period, roic in secondary:
+        ordinal = pd.Timestamp(period).toordinal()
+        if all(abs(ordinal - pd.Timestamp(kept).toordinal()) > 185 for kept, _ in merged):
+            merged.append((period, roic))
+    merged.sort(key=lambda pair: pd.Timestamp(pair[0]).toordinal(), reverse=True)
+    return merged
 
 
 def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
     """Single I/O seam: raw ROIC / Faustmann elements for one ticker.
 
-    Pulls the full annual history from the income statement and balance
-    sheet (paired per year into annual ROICs for the rolling window); the
-    latest invested capital, cash, debt, and preferred equity from the
-    annual balance sheet; and market cap from fast_info (falling back to
-    info). Missing pieces come back as None — never fabricated.
+    The ROIC history is the union of the EDGAR 10-K backfill (primary —
+    10+ years, fills the rolling window) and the yfinance annual statements
+    (secondary — fills any trailing years EDGAR filings lag); the latest
+    invested capital, cash, debt, and preferred equity come from the
+    yfinance annual balance sheet; market cap from fast_info (falling back
+    to info). Missing pieces come back as None — never fabricated.
     """
     import yfinance as yf
 
     ticker_obj = yf.Ticker(ticker)
     income_stmt = ticker_obj.income_stmt
     balance_sheet = ticker_obj.balance_sheet
+
+    yf_history = _annual_roic_pairs(income_stmt, balance_sheet)
+    edgar_history = edgar_fundamentals.edgar_roic_history(ticker, EDGAR_CACHE_DIR)
+    roic_history = [roic for _, roic in _merge_roic_histories(edgar_history, yf_history)]
 
     market_cap = None
     try:
@@ -143,7 +164,7 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
         "ticker": ticker,
         "ebit": _latest(income_stmt, "EBIT"),
         "invested_capital": _latest(balance_sheet, "Invested Capital"),
-        "roic_history": _annual_roics(income_stmt, balance_sheet),
+        "roic_history": roic_history,
         "market_cap": None if market_cap is None else float(market_cap),
         "cash": _latest_any(balance_sheet, CASH_ROWS),
         "debt": _latest(balance_sheet, "Total Debt"),

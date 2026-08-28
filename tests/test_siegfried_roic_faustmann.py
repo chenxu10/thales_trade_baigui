@@ -19,9 +19,11 @@ fetch_fundamentals.
 """
 import pandas as pd
 import pytest
+from datetime import date
 
 from fentu.siegfried.roic_faustmann import (
-    _annual_roics,
+    _annual_roic_pairs,
+    _merge_roic_histories,
     build_table,
     default_output_path,
     derive_faustmann_ratio,
@@ -59,22 +61,48 @@ def _statement(row: str, values: list) -> pd.DataFrame:
     )
 
 
-def test_annual_roics_pairs_years_and_skips_incomplete_ones():
+def test_annual_roic_pairs_pair_years_and_skip_incomplete_ones():
     income = _statement("EBIT", [2_000_000, 3_000_000, 1_000_000])
     balance = _statement("Invested Capital", [10_000_000, float("nan"), 0.0])
-    assert _annual_roics(income, balance) == pytest.approx([0.20])
+    pairs = _annual_roic_pairs(income, balance)
+    assert len(pairs) == 1
+    assert pairs[0][0] == "Y0"
+    assert pairs[0][1] == pytest.approx(0.20)
 
 
-def test_annual_roics_skips_years_without_both_legs():
+def test_annual_roic_pairs_skip_years_without_both_legs():
     income = _statement("EBIT", [2.0, 4.0])
     balance = _statement("Invested Capital", [10.0])
-    assert _annual_roics(income, balance) == pytest.approx([0.20])
+    pairs = _annual_roic_pairs(income, balance)
+    assert len(pairs) == 1
+    assert pairs[0][0] == "Y0"
+    assert pairs[0][1] == pytest.approx(0.2)
 
 
-def test_annual_roics_empty_when_statements_or_rows_missing():
-    assert _annual_roics(None, None) == []
-    assert _annual_roics(pd.DataFrame(), pd.DataFrame()) == []
-    assert _annual_roics(_statement("EBIT", [1.0]), _statement("Total Assets", [1.0])) == []
+def test_annual_roic_pairs_empty_when_statements_or_rows_missing():
+    assert _annual_roic_pairs(None, None) == []
+    assert _annual_roic_pairs(pd.DataFrame(), pd.DataFrame()) == []
+    assert _annual_roic_pairs(_statement("EBIT", [1.0]), _statement("Total Assets", [1.0])) == []
+
+
+def test_merge_roic_histories_edgar_wins_and_yfinance_fills_gaps():
+    primary = [(date(2023, 12, 31), 0.25), (date(2015, 12, 31), 0.10)]
+    secondary = [
+        (pd.Timestamp("2023-12-31"), 0.99),  # same fiscal year as EDGAR -> dropped
+        (pd.Timestamp("2022-12-31"), 0.20),  # gap -> kept
+        (pd.Timestamp("2016-06-30"), 0.15),  # within 185d of 2015-12-31 -> dropped
+        (pd.Timestamp("2017-01-31"), 0.05),  # far enough -> kept
+    ]
+    merged = _merge_roic_histories(primary, secondary)
+
+    assert [value for _, value in merged] == pytest.approx([0.25, 0.20, 0.05, 0.10])
+    assert merged[0] == (date(2023, 12, 31), 0.25)  # EDGAR's value wins the overlap
+    assert len(merged) == 4
+
+
+def test_merge_roic_histories_empty_primary_keeps_secondary():
+    secondary = [(pd.Timestamp("2022-12-31"), 0.20)]
+    assert _merge_roic_histories([], secondary) == secondary
 
 
 def test_net_worth_formula():
