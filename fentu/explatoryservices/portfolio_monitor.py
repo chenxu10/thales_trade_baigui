@@ -47,7 +47,11 @@ import numpy as np
 from matplotlib.dates import AutoDateLocator, ConciseDateFormatter
 from matplotlib.patches import Patch
 
-from fentu.explatoryservices.volcalculator import DailyVolatility, ReturnsRepository
+from fentu.explatoryservices.volcalculator import (
+    DailyVolatility,
+    ReturnsRepository,
+    non_overlapping_period_returns,
+)
 
 # (display label, yfinance ticker) — fixed positions, per the trick.
 DEFAULT_PORTFOLIO = (
@@ -185,12 +189,10 @@ class PortfolioMonitor:
 
         Daily keeps trading-day returns; weekly/monthly/yearly first resample
         closes to period-end (Friday / month-end / year-end), so each bar is
-        one real period — never an overlapping rolling window.
+        one real period — never an overlapping rolling window. Shared helper
+        lives in ``volcalculator.non_overlapping_period_returns`` (Seam 1).
         """
-        rule = self._info["resample"]
-        period_prices = (prices if rule is None
-                         else prices.resample(rule).last().dropna())
-        return np.log(period_prices / period_prices.shift(1)).dropna()
+        return non_overlapping_period_returns(prices, self._info["resample"])
 
     # --- presentation (pure render from the view-model) --------------------
 

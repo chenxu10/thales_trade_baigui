@@ -2,15 +2,21 @@
 This script provides tools to plot on a sample of data set on log-log scale
 with power law fitting.
 
-It helps you to see whether underlying data set has a power law potential
-by fitting a linear slope in log-log space to estimate alpha.
+It helps you to see whether underlying data set has a power law potential.
+The tail exponent alpha is estimated with the continuous
+Clauset-Shalizi-Newman (2009) procedure (MLE + KS-selected x_min, see
+fentu.explatoryservices.csn_powerlaw) — NOT by OLS on the log-binned
+histogram, which CSN 2009 show is biased by whole units of alpha. The
+histogram is drawn for display only; the fitted line is the Pareto density
+p(x) = (alpha-1)/x_min * (x/x_min)^(-alpha) for x >= x_min.
 
 Author: Xu.Shen<xs286@cornell.edu>
 """
 
 import numpy as np
-from scipy.stats import linregress
 import matplotlib.pyplot as plt
+
+from fentu.explatoryservices import csn_powerlaw as csn
 
 
 def create_log_space_bins(x_min, samples) -> np.ndarray:
@@ -69,89 +75,23 @@ def _positive_density_mask(density):
     return density > 0
 
 
-def _tail_start_index(n_valid, tail_percent):
-    """Index at which the extreme tail begins (rightmost tail_percent of points)."""
-    n_tail = max(int(n_valid * tail_percent), 2)
-    return n_valid - n_tail
+def _pareto_density_loglog_params(alpha, x_min):
+    """Slope/intercept of the fitted Pareto density in log10-log10 space.
 
-
-def _fit_loglog_line(x, y):
-    """Fit log10(y) = slope * log10(x) + intercept; return slope, intercept."""
-    slope, intercept, _, _, _ = linregress(np.log10(x), np.log10(y))
+    p(x) = (alpha-1)/x_min * (x/x_min)^(-alpha)
+    => log10(p) = -alpha * log10(x) + log10((alpha-1) * x_min^(alpha-1))
+    """
+    slope = -alpha
+    intercept = np.log10((alpha - 1.0) * x_min ** (alpha - 1.0))
     return slope, intercept
 
 
-def _tail_mask(n_valid, tail_start_idx):
-    """Boolean mask of length n_valid, True over the tail window."""
-    mask = np.zeros(n_valid, dtype=bool)
-    mask[tail_start_idx:] = True
-    return mask
+def _loglog_fit_data(samples, x_min):
+    """Histogram + CSN tail fit for the log-log plot (pure computation, no axes).
 
-
-def fit_power_law_slope(bin_centers, density, tail_percent=0.2):
-    """
-    Fit a log-log line to the extreme tail; return slope and intercept.
-
-    Uses extreme value theory approach: fits only the tail portion of the data
-    where power law behavior is most prominent.
-
-    For power law p(x) ~ x^(-alpha), in log-log space:
-    log(p) = -alpha * log(x) + const
-    So alpha = -slope (derived by the caller; not returned to avoid redundancy).
-
-    Selection of which bins belong to the tail is a separate concern, exposed
-    by tail_mask(). This function's single responsibility is the fit.
-
-    Parameters:
-    bin_centers: Array of bin center values
-    density: Array of density values
-    tail_percent: Fraction of extreme tail data to use for fitting (default 0.2 = 20%)
-                  Uses the largest x values (rightmost portion of log-log plot)
-
-    Returns:
-    tuple: (slope, intercept)
-        - slope: Slope of linear fit in log-log space (alpha = -slope)
-        - intercept: Intercept of linear fit
-    """
-    valid_mask = _positive_density_mask(density)
-    valid_centers = bin_centers[valid_mask]
-    valid_density = density[valid_mask]
-
-    tail_start_idx = _tail_start_index(len(valid_centers), tail_percent)
-
-    return _fit_loglog_line(
-        valid_centers[tail_start_idx:], valid_density[tail_start_idx:]
-    )
-
-
-def tail_mask(bin_centers, density, tail_percent=0.2):
-    """
-    Boolean mask over positive-density bins, True over the extreme tail window.
-
-    Companion to fit_power_law_slope(): the same tail_percent selects the same
-    bins, so callers can fit and color points consistently. This function's
-    single responsibility is tail selection; it performs no fitting.
-
-    Parameters:
-    bin_centers: Array of bin center values
-    density: Array of density values
-    tail_percent: Fraction of extreme tail data to mark (default 0.2 = 20%)
-
-    Returns:
-    np.ndarray: Boolean mask aligned to the positive-density bins, True over the
-                rightmost tail_percent of those bins.
-    """
-    valid_mask = _positive_density_mask(density)
-    n_valid = int(valid_mask.sum())
-    tail_start_idx = _tail_start_index(n_valid, tail_percent)
-    return _tail_mask(n_valid, tail_start_idx)
-
-
-def _loglog_fit_data(samples, x_min, tail_percent):
-    """Histogram + tail fit for the log-log plot (pure computation, no axes).
-
-    Returns a dict with the positive-density bins, the fitted slope/intercept,
-    the derived alpha, and the boolean mask marking tail bins.
+    Returns a dict with the positive-density bins, the CSN fit result, the
+    boolean mask marking bins at/above the fitted x_min, and the
+    slope/intercept of the fitted Pareto density line.
     """
     bins = create_log_space_bins(x_min, samples)
     density, bin_centers, _ = compute_histogram_with_bins(
@@ -162,31 +102,45 @@ def _loglog_fit_data(samples, x_min, tail_percent):
     valid_centers = bin_centers[mask]
     valid_density = density[mask]
 
-    slope, intercept = fit_power_law_slope(bin_centers, density, tail_percent)
+    fit = csn.fit_power_law_continuous(samples)
 
-    return {
+    out = {
         'valid_centers': valid_centers,
         'valid_density': valid_density,
-        'tmask': tail_mask(bin_centers, density, tail_percent),
-        'slope': slope,
-        'intercept': intercept,
-        'alpha': -slope,
+        'fit': fit,
+        'tmask': None,
+        'slope': None,
+        'intercept': None,
+        'alpha': fit['alpha'],
     }
+    if fit['alpha'] is not None:
+        out['tmask'] = valid_centers >= fit['x_min']
+        out['slope'], out['intercept'] = _pareto_density_loglog_params(
+            fit['alpha'], fit['x_min']
+        )
+    else:
+        out['tmask'] = np.zeros(len(valid_centers), dtype=bool)
+    return out
 
 
-def _draw_loglog_series(ax, data, tail_percent):
+def _draw_loglog_series(ax, data):
     """Render body points, tail points, and the fitted line onto the axes."""
     valid_centers = data['valid_centers']
     valid_density = data['valid_density']
     tmask = data['tmask']
+    fit = data['fit']
 
     ax.loglog(
         valid_centers[~tmask], valid_density[~tmask],
         'o', alpha=0.4, color='gray', label='Data (not fitted)'
     )
+    if fit['alpha'] is None:
+        return
+
     ax.loglog(
         valid_centers[tmask], valid_density[tmask],
-        'o', alpha=0.7, color='blue', label=f'Tail ({int(tail_percent*100)}%)'
+        'o', alpha=0.7, color='blue',
+        label=f"Tail (x ≥ x_min={fit['x_min']:.3g}, n={fit['n_tail']})"
     )
 
     fit_x = valid_centers[tmask]
@@ -194,40 +148,45 @@ def _draw_loglog_series(ax, data, tail_percent):
     ax.loglog(fit_x, fit_y, 'r-', linewidth=2, label=f"Fit (α={data['alpha']:.2f})")
 
 
-def _decorate_loglog_axes(ax, alpha, title):
+def _decorate_loglog_axes(ax, data, title):
     """Axis labels, title, legend, and grid for the log-log fit plot."""
     ax.set_xlabel('x (log scale)')
     ax.set_ylabel('Probability density (log scale)')
-    if title:
-        ax.set_title(f'{title}: α={alpha:.2f}')
+    if data['alpha'] is not None:
+        fit_text = f"α={data['alpha']:.2f}"
     else:
-        ax.set_title(f'Power-law fit: α={alpha:.2f}')
+        fit_text = "power-law fit unavailable"
+    if title:
+        ax.set_title(f'{title}: {fit_text}')
+    else:
+        ax.set_title(f'Power-law fit: {fit_text}')
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3, which='both')
 
 
-def plot_loglog_with_fit(samples, x_min, ax=None, title=None, tail_percent=0.2):
+def plot_loglog_with_fit(samples, x_min, ax=None, title=None):
     """
-    Plot log-log histogram with linear fit to estimate power law alpha.
+    Plot log-log histogram with the CSN (2009) power-law tail fit.
 
-    Uses extreme value theory: fits only the tail portion of the distribution.
+    The histogram is display only; alpha and the fitted line come from the
+    continuous CSN estimator (MLE + KS-selected x_min) on the raw samples.
 
     Parameters:
-    samples: Power-law distributed samples
-    x_min: Minimum value of the distribution
+    samples: Power-law distributed samples (positive, continuous)
+    x_min: Lower edge of the histogram bins (display only — the fit's x_min
+           is selected by KS minimization, not taken from this argument)
     ax: Matplotlib axes object. If None, uses current axes
     title: Optional custom title for the plot
-    tail_percent: Fraction of extreme tail to use for fitting (default 0.2 = 20%)
 
     Returns:
     ax: The axes object used for plotting
-    alpha: Estimated power law exponent
+    alpha: Estimated power law exponent (None if the fit is unavailable)
     """
     if ax is None:
         ax = plt.gca()
 
-    data = _loglog_fit_data(samples, x_min, tail_percent)
-    _draw_loglog_series(ax, data, tail_percent)
-    _decorate_loglog_axes(ax, data['alpha'], title)
+    data = _loglog_fit_data(samples, x_min)
+    _draw_loglog_series(ax, data)
+    _decorate_loglog_axes(ax, data, title)
 
     return ax, data['alpha']

@@ -68,10 +68,15 @@ uv run pytest
 ~~- (TODO): review pharm trade~~
 - (TODO): Abstract forget details-Sampling-BinaryEvent-GreenBook 
 ~~- (TODO): shenxin jue cha wu jie~~
-- (TODO): Gold mutual information
+~~- (TODO): Gold mutual information~~
+- I am wrong USO/TLT are noise
+- Arbitarge and squeeze
+- You cannot hedge a slow dollor decline but a well-defined variables slow dollar decline refleced in it
 - (TODO): Fable code review
-- (TODO): Parksin law 20 percent 80 percent value/Focus on last maximial
-- (TODO): 30 year mortgage
+~~- (TODO): Parksin law 20 percent 80 percent value/Focus on last maximial~~
+~~- (TODO): 30 year mortgage(MBB)~~
 - (TODO): Humble trade(Field not object)
-- (TODO): BackTest Idea Loop
+~~- (TODO): BackTest Idea Loop~~
 - (TODO): Strategy not benchmark/not CARG/cost-effectiveness of hedges(Three huice/guonihe/survivorship bias/kanleshuju)
+- (TODO): AI边界(人类的历史知识中负面和失败很少报道、小概率和样本空间以外、构建概念和建立理论)
+- TOOD: ROIC/Fautsmanratio for bio/sp/ndx

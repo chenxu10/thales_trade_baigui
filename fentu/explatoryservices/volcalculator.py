@@ -38,8 +38,9 @@ Topology Diagram (ASCII)
  |   __init__(start_date, end_date)   <- cheap, no I/O                       |
  |   _raw_open_high_low_close(instrument)            -> yf.Ticker + curl_cffi session;      |
  |                                       strips tz from the index            |
- |   get_prices(instrument)           -> _raw_open_high_low_close + start/end window        |
- |   get_returns(instrument, period)  -> np.log(prices/shift)[period:]       |
+|   get_prices(instrument)           -> _raw_open_high_low_close + start/end window        |
+|   get_returns(instrument, n)       -> np.log(prices/shift(n))[n:]  (daily)                |
+|   get_period_returns(instrument, period) -> non-overlapping calendar log returns          |
  |   get_vix_open_high_low_close() / get_vix_prices()-> full ^VIX history, UN-windowed      |
  +---------------------------------------------------------------------------+
  +---------------------------------------------------------------------------+
@@ -73,7 +74,7 @@ Topology Diagram (ASCII)
  |                                                                           |
  |  [Volatility]    calculate_daily_volatility() -> DailyVolatility          |
  |  [Extreme]       find_negative/positive_extreme_returns(k|threshold)      |
- |  [Visualization] visualize_percentage_change(period, tail_percent)        |
+  |  [Visualization] visualize_percentage_change(period)                      |
  |     +-> _prepare_percentage_change_data() (data view-model)               |
  |     +-> _plot_percentage_change()                                         |
  |           +-> ps.qq_plot / ps.histgram_plot / spl.plot_loglog_with_fit    |
@@ -82,13 +83,13 @@ Topology Diagram (ASCII)
  |  [Reporting]     get_past_week_price_and_log_returns()                    |
  +---------------------------------------------------------------------------+
 
- Entry Point
- +---------------------------------------------------------------------------+
- | __main__: VolatilityFacade("ILS")                                         |
- |   -> get_past_week_price_and_log_returns()                                |
- |   -> calculate_daily_volatility()                                         |
- |   -> find_negative/positive_extreme_returns() (threshold=+-0.2)           |
- +---------------------------------------------------------------------------+
+ Run it
++---------------------------------------------------------------------------+
+| uv run fentu/explatoryservices/seechange.py <timeframe> <ticker>           |
+|   timeframes: daily | weekly | monthly | yearly                            |
+|   e.g. uv run fentu/explatoryservices/seechange.py monthly QQQ             |
+|   e.g. uv run fentu/explatoryservices/seechange.py daily portfolio         |
++---------------------------------------------------------------------------+
 """
 
 import yfinance as yf
@@ -126,6 +127,38 @@ def _now_eastern():
     now_utc = datetime.now(timezone.utc)
     offset_h = -4 if _is_us_dst(now_utc) else -5
     return now_utc.astimezone(timezone(timedelta(hours=offset_h), "ET"))
+
+
+# ---------------------------------------------------------------------------
+# Calendar-period resampling (shared with PortfolioMonitor).
+# ---------------------------------------------------------------------------
+
+# Period -> pandas period-end rule used to resample closes BEFORE taking log
+# returns (None = trading days, no resampling). The whole point is to make each
+# monthly/yearly observation a real calendar period, never an overlapping
+# rolling window: adjacent rolling 252-day bars share ~99.6% of their content,
+# a pseudo-replicated fake-large sample that overstates the confidence of the
+# tail alpha and extreme-return lists on the see_change chart.
+PERIOD_RESAMPLE_RULE = {
+    "daily": None,
+    "weekly": "W-FRI",
+    "monthly": "ME",
+    "yearly": "YE",
+}
+
+
+def non_overlapping_period_returns(prices, resample_rule):
+    """Log returns of NON-overlapping calendar periods from daily closes.
+
+    Resamples closes to period-end (Friday / month-end / year-end) so each
+    observation is one real calendar period, then takes one-period log returns.
+    Daily keeps trading-day returns. This is the same discipline PortfolioMonitor
+    documents: "a rolling 'yearly' panel is one number drifting over a quarter
+    while pretending to be 60 observations."
+    """
+    period_prices = (prices if resample_rule is None
+                     else prices.resample(resample_rule).last().dropna())
+    return np.log(period_prices / period_prices.shift(1)).dropna()
 
 
 class VolatilityCalculator:
@@ -217,6 +250,17 @@ class ReturnsRepository:
     def get_returns(self, instrument, period_length):
         prices = self.get_prices(instrument)
         return np.log(prices / prices.shift(period_length))[period_length:]
+
+    def get_period_returns(self, instrument, period):
+        """Non-overlapping calendar-period log returns for `period`.
+
+        Used for weekly/monthly/yearly: resamples to period-end so each bar is
+        one real calendar period. Daily (``period='daily'``) uses ``get_returns``
+        with period_length=1 (already non-overlapping). See
+        ``non_overlapping_period_returns``.
+        """
+        prices = self.get_prices(instrument)
+        return non_overlapping_period_returns(prices, PERIOD_RESAMPLE_RULE[period])
 
     def get_vix_open_high_low_close(self):
         """Full ^VIX open_high_low_close history (1990 -> today), unfiltered."""
@@ -336,16 +380,28 @@ class VolatilityFacade:
 
     # --- lazy, cached return periods ----------------------------------------
 
-    def _get_return_period(self, key, period_length):
+    def _get_return_period(self, key):
+        """Return the cached period series, computing it lazily on first access.
+
+        Daily is already non-overlapping (one trading day per observation), so
+        it goes through ``ReturnsRepository.get_returns`` with period_length=1.
+        Weekly/monthly/yearly use ``get_period_returns``, which resamples closes
+        to period-end so each bar is a real calendar period — never an
+        overlapping rolling window (rolling 252-day bars share ~99.6% content).
+        """
         cached = self._returns_cache.get(key)
         if cached is None:
-            self._returns_cache[key] = self._repository.get_returns(
-                self.instrument, period_length)
+            if PERIOD_RESAMPLE_RULE[key] is None:
+                self._returns_cache[key] = self._repository.get_returns(
+                    self.instrument, 1)
+            else:
+                self._returns_cache[key] = self._repository.get_period_returns(
+                    self.instrument, key)
         return self._returns_cache[key]
 
     @property
     def daily_returns(self):
-        return self._get_return_period('daily', 1)
+        return self._get_return_period('daily')
 
     @daily_returns.setter
     def daily_returns(self, value):
@@ -353,7 +409,7 @@ class VolatilityFacade:
 
     @property
     def weekly_returns(self):
-        return self._get_return_period('weekly', 5)
+        return self._get_return_period('weekly')
 
     @weekly_returns.setter
     def weekly_returns(self, value):
@@ -361,7 +417,7 @@ class VolatilityFacade:
 
     @property
     def monthly_returns(self):
-        return self._get_return_period('monthly', 21)
+        return self._get_return_period('monthly')
 
     @monthly_returns.setter
     def monthly_returns(self, value):
@@ -369,7 +425,7 @@ class VolatilityFacade:
 
     @property
     def yearly_returns(self):
-        return self._get_return_period('yearly', 252)
+        return self._get_return_period('yearly')
 
     @yearly_returns.setter
     def yearly_returns(self, value):
@@ -435,14 +491,13 @@ class VolatilityFacade:
             'instrument': self.instrument,
         }
 
-    def _plot_tail_fits(self, tails, axes, tail_percent):
+    def _plot_tail_fits(self, tails, axes):
         """Render left/right tail log-log fits onto the two bottom-row axes."""
         for tail, ax in zip(tails, axes):
             if tail['x_min'] is not None:
                 spl.plot_loglog_with_fit(
                     tail['data'], tail['x_min'], ax=ax,
                     title=tail['title'],
-                    tail_percent=tail_percent
                 )
 
     def _build_percentage_change_figure_layout(self):
@@ -464,7 +519,7 @@ class VolatilityFacade:
         ax_vix = fig.add_subplot(gs[2, :])
         return fig, ax_qq, ax_hist, ax_left, ax_right, ax_vix
 
-    def _plot_percentage_change(self, data, tail_percent):
+    def _plot_percentage_change(self, data):
         """
         Plot percentage change visualizations.
 
@@ -473,29 +528,28 @@ class VolatilityFacade:
 
         Args:
             data: dict from _prepare_percentage_change_data
-            tail_percent: Fraction of extreme tail to fit for alpha estimation
         """
         fig, ax_qq, ax_hist, ax_left, ax_right, ax_vix = self._build_percentage_change_figure_layout()
 
         ps.qq_plot(data['returns'], ax=ax_qq, show=False)
         ps.histgram_plot(data['returns'], ax=ax_hist, show=False)
-        self._plot_tail_fits(data['tails'], [ax_left, ax_right], tail_percent)
+        self._plot_tail_fits(data['tails'], [ax_left, ax_right])
         self._plot_vix_panel(ax_vix)
 
         fig.suptitle(f"{data['instrument']} {data['period'].capitalize()} Returns")
         plt.show()
 
-    def visualize_percentage_change(self, period='daily', tail_percent=0.10):
+    def visualize_percentage_change(self, period='daily'):
         """
         Visualize percentage changes for a specific period using QQ plot, histogram,
-        and log-log plots for left and right tail analysis.
+        and log-log plots for left and right tail analysis. Tail alpha is
+        estimated by the CSN (2009) fitter (MLE + KS-selected x_min).
 
         Args:
             period: str, one of 'daily', 'weekly', 'monthly', 'yearly'
-            tail_percent: Fraction of extreme tail to fit for alpha estimation (default 0.1)
         """
         data = self._prepare_percentage_change_data(period)
-        self._plot_percentage_change(data, tail_percent)
+        self._plot_percentage_change(data)
 
     def _find_extreme_returns(self, period='daily', k=None, threshold=None, side='negative'):
         """
@@ -556,7 +610,7 @@ class VolatilityFacade:
         return pd.DataFrame({'price': prices, 'log_return': log_returns})
 
 if __name__ == "__main__":
-    volatility = VolatilityFacade("ILS")
+    volatility = VolatilityFacade("QQQ")
     # Visualize different time-frame return distributions
     # volatility.visualize_percentage_change('weekly')
     print(volatility.get_past_week_price_and_log_returns())

@@ -141,10 +141,11 @@ def fetch_universe_closes(tickers: List[str]):
         try:
             closes = yf.download(chunk, period="1y", auto_adjust=False, progress=False)["Close"]
         except Exception:
-            continue
-        if isinstance(closes, pd.Series):
-            closes = closes.to_frame()
-        frames.append(closes)
+            closes = None
+        if closes is not None:
+            if isinstance(closes, pd.Series):
+                closes = closes.to_frame()
+            frames.append(closes)
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, axis=1)
@@ -335,14 +336,13 @@ def update_ods(path: str, entries: List[dict], top2: List[str]) -> None:
         cells = row.getElementsByType(TableCell)
         texts = [str(p) for c in cells for p in c.getElementsByType(P)]
         entry = by_ticker.get(texts[0]) if texts else None
-        if entry is None:
-            continue
-        row_style = cells[0].getAttribute("stylename")
-        for value in criterion_cells(entry):
-            row.addElement(_cell(value, row_style))
-        if entry["ticker"] in top2:
-            for cell in row.getElementsByType(TableCell):
-                cell.setAttribute("stylename", "oneil_top")
+        if entry is not None:
+            row_style = cells[0].getAttribute("stylename")
+            for value in criterion_cells(entry):
+                row.addElement(_cell(value, row_style))
+            if entry["ticker"] in top2:
+                for cell in row.getElementsByType(TableCell):
+                    cell.setAttribute("stylename", "oneil_top")
 
     doc.save(path)
 
@@ -390,11 +390,10 @@ def update_xlsx(path: str, entries: List[dict], top2: List[str]) -> None:
     gold = PatternFill("solid", fgColor="FFD966")
     for ticker in top2:
         entry = by_ticker.get(ticker)
-        if entry is None:
-            continue
-        for column in range(1, 48):
-            ws.cell(row=entry["row"], column=column).fill = gold
-        ws.cell(row=entry["row"], column=1).font = Font(bold=True)
+        if entry is not None:
+            for column in range(1, 48):
+                ws.cell(row=entry["row"], column=column).fill = gold
+            ws.cell(row=entry["row"], column=1).font = Font(bold=True)
     wb.save(path)
 
 
@@ -454,17 +453,16 @@ def reorder_xlsx(path: str) -> List[str]:
 
     snapshots = []
     for old_row in range(XLSX_FIRST_DATA_ROW, XLSX_LAST_DATA_ROW + 1):
-        if not ws.cell(row=old_row, column=1).value:
-            continue
-        cells = [ws.cell(row=old_row, column=col) for col in range(1, XLSX_LAST_COLUMN + 1)]
-        growth = _xlsx_growth(ws.cell(row=old_row, column=27).value)
-        rank = _parse_rank(ws.cell(row=old_row, column=36).value)
-        letters = int(ws.cell(row=old_row, column=40).value or 0)
-        snapshots.append({
-            "old_row": old_row,
-            "key": (letters, growth if growth is not None else -1.0, rank if rank is not None else -1.0),
-            "cells": [(cell.value, copy(cell._style)) for cell in cells],
-        })
+        if ws.cell(row=old_row, column=1).value:
+            cells = [ws.cell(row=old_row, column=col) for col in range(1, XLSX_LAST_COLUMN + 1)]
+            growth = _xlsx_growth(ws.cell(row=old_row, column=27).value)
+            rank = _parse_rank(ws.cell(row=old_row, column=36).value)
+            letters = int(ws.cell(row=old_row, column=40).value or 0)
+            snapshots.append({
+                "old_row": old_row,
+                "key": (letters, growth if growth is not None else -1.0, rank if rank is not None else -1.0),
+                "cells": [(cell.value, copy(cell._style)) for cell in cells],
+            })
     ordered = sorted(snapshots, key=lambda s: s["key"], reverse=True)
 
     for new_idx, snap in enumerate(ordered):

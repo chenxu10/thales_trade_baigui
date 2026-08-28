@@ -106,10 +106,9 @@ def levels_view(open_high_low_close, instrument=DEFAULT_INSTRUMENT, today=None):
     entries = []
     for short, _label, start in _windows(today, instrument):
         stats = window_high_low(open_high_low_close, start, today)
-        if stats is None:
-            continue
-        entries.append(_level_entry(short, "high", stats))
-        entries.append(_level_entry(short, "low", stats))
+        if stats is not None:
+            entries.append(_level_entry(short, "high", stats))
+            entries.append(_level_entry(short, "low", stats))
     return _merge_coincident_levels(entries)
 
 
