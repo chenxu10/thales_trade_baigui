@@ -30,6 +30,7 @@ from fentu.siegfried.roic_faustmann import (
     derive_net_worth,
     derive_roic,
     read_tickers,
+    roic_breakdown,
     write_table,
 )
 
@@ -103,6 +104,27 @@ def test_merge_roic_histories_edgar_wins_and_yfinance_fills_gaps():
 def test_merge_roic_histories_empty_primary_keeps_secondary():
     secondary = [(pd.Timestamp("2022-12-31"), 0.20)]
     assert _merge_roic_histories([], secondary) == secondary
+
+
+def test_roic_breakdown_windows_to_ten_years_and_medians():
+    pairs = [(date(2025, 12, 31), 0.20)] * 10 + [(date(2014, 12, 31), 0.40)]
+    windowed, median = roic_breakdown(pairs)
+    assert len(windowed) == 10
+    assert median == pytest.approx(0.20)
+
+
+def test_roic_breakdown_placeholder_when_history_short():
+    pairs = [(date(2025, 12, 31), 0.20)] * 9
+    windowed, median = roic_breakdown(pairs)
+    assert len(windowed) == 9
+    assert median is None
+
+
+def test_build_table_reports_progress_per_ticker():
+    calls = []
+    fetch = lambda t: {"ticker": t, "roic_history": HISTORY_020}
+    build_table(["A", "B"], fetch=fetch, progress=lambda done, total, t: calls.append((done, total, t)))
+    assert calls == [(1, 2, "A"), (2, 2, "B")]
 
 
 def test_net_worth_formula():

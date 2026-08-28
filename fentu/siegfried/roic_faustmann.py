@@ -27,14 +27,36 @@ The ROIC history is backfilled from SEC EDGAR XBRL (see
 ``edgar_fundamentals``): yfinance annual statements reach only ~4 years back,
 while EDGAR companyfacts carry 10+ years of the same 10-K facts.
 
+Effect and output:
+
+  * writes a NEW workbook next to the input, ``<input stem>_siegfried.<ext>``
+    (the input file is never modified), one row per ticker, in this column
+    order: ``ticker, ebit, invested_capital, roic, market_cap, cash, debt,
+    preferred_equity, net_worth, faustmann_ratio``;
+
+  * ``roic`` is the rolling 10-year median of the annual EBIT / invested
+    capital ratios; fewer than ten years print "-" (placeholder), never a
+    single-year stand-in;
+
+  * EDGAR facts and the CIK map cache under ``data/edgar_cache/`` (fresh
+    within 7 / 30 days), so re-runs skip the network for cached tickers;
+
+  * stdout prints a live progress line (done/total, elapsed, ETA) while the
+    first uncached run downloads, then the full table, a note counting
+    tickers still under ten years of history, and a worked example: the
+    per-year ROICs behind one ticker's final ``roic`` column (``--history
+    TICKER``, default NVDA) — years inside the 10-year window marked ``*``,
+    plus the median.
+
 Usage:
     uv run python -m fentu.siegfried.roic_faustmann data/sp500_ticker.ods
-    It reads the ticker list from it and writes a new file data/sp500_ticker_siegfried.ods (same folder, same extension, _siegfried suffix
     uv run python -m fentu.siegfried.roic_faustmann data/ndx100_ticker.ods -o out.ods
+    uv run python -m fentu.siegfried.roic_faustmann /any/folder/tickers.xlsx
 """
 import argparse
 import statistics
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -147,7 +169,8 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
 
     yf_history = _annual_roic_pairs(income_stmt, balance_sheet)
     edgar_history = edgar_fundamentals.edgar_roic_history(ticker, EDGAR_CACHE_DIR)
-    roic_history = [roic for _, roic in _merge_roic_histories(edgar_history, yf_history)]
+    merged_pairs = _merge_roic_histories(edgar_history, yf_history)
+    roic_history = [roic for _, roic in merged_pairs]
 
     market_cap = None
     try:
@@ -165,6 +188,7 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
         "ebit": _latest(income_stmt, "EBIT"),
         "invested_capital": _latest(balance_sheet, "Invested Capital"),
         "roic_history": roic_history,
+        "roic_history_pairs": merged_pairs,
         "market_cap": None if market_cap is None else float(market_cap),
         "cash": _latest_any(balance_sheet, CASH_ROWS),
         "debt": _latest(balance_sheet, "Total Debt"),
@@ -184,6 +208,37 @@ def derive_roic(roic_history: Optional[List[float]], window: int = ROIC_WINDOW_Y
     if not roic_history or len(roic_history) < window:
         return None
     return statistics.median(roic_history[:window])
+
+
+def roic_breakdown(pairs: List[tuple], window: int = ROIC_WINDOW_YEARS):
+    """(trailing-window pairs, median) from a merged (period, roic) history.
+
+    Mirrors ``derive_roic``: fewer than ``window`` years yields the whole
+    history and None — the "-" placeholder — never a short-window median.
+    """
+    if not pairs:
+        return [], None
+    windowed = pairs[:window]
+    if len(windowed) < window:
+        return windowed, None
+    return windowed, statistics.median(roic for _, roic in windowed)
+
+
+def print_roic_history(ticker: str, pairs: List[tuple]) -> None:
+    """Print the per-year ROICs behind a ticker's final ROIC (worked example).
+
+    Marks the years inside the trailing 10-year window with ``*`` and prints
+    the median that lands in the ``roic`` column.
+    """
+    windowed, median = roic_breakdown(pairs)
+    print(f"{ticker} annual ROICs (EDGAR + yfinance, most recent first; * = in the 10-year window):")
+    for index, (period, roic) in enumerate(pairs):
+        mark = "*" if index < len(windowed) else " "
+        print(f"  {mark} {pd.Timestamp(period).strftime('%Y-%m-%d')}  {roic:.3f}")
+    if median is None:
+        print(f"  fewer than {ROIC_WINDOW_YEARS} years of history -> '-' placeholder (no single-year stand-in)")
+    else:
+        print(f"  median of the trailing {len(windowed)} annual ROICs = {median:.3f} -> the 'roic' column")
 
 
 def derive_net_worth(
@@ -213,10 +268,16 @@ def derive_faustmann_ratio(market_cap: Optional[float], net_worth: Optional[floa
 def build_table(
     tickers: List[str],
     fetch: Callable[[str], Dict[str, Optional[float]]] = fetch_fundamentals,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> pd.DataFrame:
-    """One row per ticker: raw elements plus derived roic / net_worth / faustmann_ratio."""
+    """One row per ticker: raw elements plus derived roic / net_worth / faustmann_ratio.
+
+    ``progress`` (optional) is called as ``progress(done, total, ticker)``
+    after each fetch — the CLI uses it for the elapsed/ETA progress line.
+    """
     rows = []
-    for ticker in tickers:
+    total = len(tickers)
+    for index, ticker in enumerate(tickers, start=1):
         raw = fetch(ticker)
         net_worth = derive_net_worth(
             raw.get("invested_capital"), raw.get("cash"), raw.get("debt"), raw.get("preferred_equity")
@@ -235,6 +296,8 @@ def build_table(
                 "faustmann_ratio": derive_faustmann_ratio(raw.get("market_cap"), net_worth),
             }
         )
+        if progress is not None:
+            progress(index, total, ticker)
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS)
 
 
@@ -384,11 +447,33 @@ def main(argv: Optional[list] = None) -> int:
     )
     parser.add_argument("excel", help="ticker workbook (.ods, .xlsx, .xls), e.g. data/sp500_ticker.ods")
     parser.add_argument("-o", "--output", help="output Excel path (default: <input stem>_siegfried.xlsx)")
+    parser.add_argument(
+        "--history",
+        default="NVDA",
+        help="ticker whose per-year ROIC breakdown to print as a worked example (default NVDA)",
+    )
     args = parser.parse_args(argv)
 
     tickers = read_tickers(args.excel)
     print(f"fetching fundamentals for {len(tickers)} tickers ...")
-    table = build_table(tickers)
+    print(
+        "first run: EDGAR 10-K histories + yfinance, throttled to ~0.5s/ticker — allow several minutes;"
+        " re-runs hit the data/edgar_cache/ and skip the network for cached tickers"
+    )
+    start = time.monotonic()
+
+    def progress(done: int, total: int, ticker: str) -> None:
+        elapsed = time.monotonic() - start
+        rate = done / elapsed if elapsed > 0 else 0.0
+        eta = (total - done) / rate if rate > 0 else 0.0
+        print(f"\r  [{done:>4}/{total}] {ticker:<6} {elapsed:5.0f}s elapsed, ETA {eta:5.0f}s", end="", flush=True)
+
+    table = build_table(tickers, progress=progress)
+    print()
+
+    if args.history in table["ticker"].values:
+        raw = fetch_fundamentals(args.history)
+        print_roic_history(args.history, raw.get("roic_history_pairs") or [])
 
     output = args.output or default_output_path(args.excel)
     write_table(table, output)
