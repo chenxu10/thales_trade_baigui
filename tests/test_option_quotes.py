@@ -33,6 +33,18 @@ def test_mid_averages_bid_ask():
     assert mid({"bid": 4.0, "ask": 6.0}) == 5.0
 
 
+def test_mid_falls_back_to_last_price_when_bid_ask_unquoted():
+    # Yahoo's options feed zeroes bid/ask even mid-session while lastPrice
+    # stays real; the mid must fall back to the last traded price, not
+    # collapse to 0 (a 0 mid voids every quote and skips the whole chart).
+    assert mid({"bid": 0.0, "ask": 0.0, "lastPrice": 19.08}) == 19.08
+
+
+def test_mid_falls_back_to_zero_when_no_price_at_all():
+    assert mid({"bid": 0.0, "ask": 0.0, "lastPrice": 0.0}) == 0.0
+    assert mid({"bid": 0.0, "ask": 0.0, "lastPrice": None}) == 0.0
+
+
 def test_atm_strike_nearest_to_spot():
     assert atm_strike(fake_chain(), 723.03) == 725.0
 

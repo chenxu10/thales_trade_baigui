@@ -10,8 +10,17 @@ from datetime import datetime
 
 
 def mid(row) -> float:
-    """Mid-market price from a yfinance chain row (bid, ask)."""
-    return (float(row["bid"]) + float(row["ask"])) / 2.0
+    """Mid-market price from a yfinance chain row (bid, ask); lastPrice when unquoted.
+
+    Yahoo's options feed can zero bid/ask (and IV) even mid-session while
+    `lastPrice` stays real — collapsing to 0 would void every quote and skip
+    the whole chart, so the mid falls back to the last traded price.
+    """
+    bid, ask = float(row["bid"]), float(row["ask"])
+    if bid > 0 or ask > 0:
+        return (bid + ask) / 2.0
+    last = float(row.get("lastPrice") or 0.0)
+    return last if last > 0 else 0.0
 
 
 def fetch_spot(symbol: str) -> float:
