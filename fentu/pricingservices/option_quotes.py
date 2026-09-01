@@ -22,6 +22,22 @@ def fetch_spot(symbol: str) -> float:
     return float(ticker.history(period="1d")["Close"].iloc[-1])
 
 
+def nearest_strike(side, strike) -> float | None:
+    """Closest available strike to `strike` in a chain side (calls or puts).
+
+    A rounded ``otm_strike`` can land on a strike the chain does not carry —
+    e.g. QQQ rallies so the far-OTM wing exits the chain's strike range. The
+    old exact ``==`` lookup then indexed an empty frame (``IndexError``).
+    Returns the nearest present strike instead, or ``None`` for an empty side.
+    """
+    if side is None or side.empty:
+        return None
+    strikes = side["strike"].astype(float)
+    if strikes.empty:
+        return None
+    return float(strikes.iloc[(strikes - float(strike)).abs().argmin()])
+
+
 def pick_expiry(ticker, target_days: int, max_dte_factor: float = 1.7) -> str | None:
     """Nearest yfinance expiration string to `target_days` DTE (within target*max_dte_factor)."""
     today = datetime.now().date()
@@ -48,10 +64,12 @@ def atm_strike(chain, spot: float) -> float:
 
 
 def straddle_mid(chain, strike: float) -> float:
-    """ATM straddle mid: call mid + put mid at `strike`."""
+    """ATM straddle mid: call mid + put mid at `strike` (nearest when absent)."""
     total = 0.0
     for side in (chain.calls, chain.puts):
-        total += mid(side[side["strike"] == strike].iloc[0])
+        present = nearest_strike(side, strike)
+        if present is not None:
+            total += mid(side[side["strike"] == present].iloc[0])
     return total
 
 
@@ -61,15 +79,24 @@ def otm_strike(spot: float, otm_pct: float, step: float = 5.0) -> float:
 
 
 def otm_put_mid(chain, strike: float) -> float:
-    """Mid price of the put at `strike`."""
-    return mid(chain.puts[chain.puts["strike"] == strike].iloc[0])
+    """Mid price of the put at `strike` (nearest strike when `strike` is absent)."""
+    present = nearest_strike(chain.puts, strike)
+    if present is None:
+        return 0.0
+    return mid(chain.puts[chain.puts["strike"] == present].iloc[0])
 
 
 def put_iv(chain, strike: float) -> float:
-    """Implied volatility (decimal) of the put at `strike`."""
-    return float(chain.puts[chain.puts["strike"] == strike].iloc[0]["impliedVolatility"])
+    """Implied volatility (decimal) of the put at `strike` (nearest when absent)."""
+    present = nearest_strike(chain.puts, strike)
+    if present is None:
+        return 0.0
+    return float(chain.puts[chain.puts["strike"] == present].iloc[0]["impliedVolatility"])
 
 
 def call_iv(chain, strike: float) -> float:
-    """Implied volatility (decimal) of the call at `strike`."""
-    return float(chain.calls[chain.calls["strike"] == strike].iloc[0]["impliedVolatility"])
+    """Implied volatility (decimal) of the call at `strike` (nearest when absent)."""
+    present = nearest_strike(chain.calls, strike)
+    if present is None:
+        return 0.0
+    return float(chain.calls[chain.calls["strike"] == present].iloc[0]["impliedVolatility"])

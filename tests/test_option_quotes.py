@@ -4,11 +4,14 @@ import pandas as pd
 
 from fentu.pricingservices.option_quotes import (
     atm_strike,
+    call_iv,
     days_to_expiry,
     mid,
+    nearest_strike,
     otm_put_mid,
     otm_strike,
     pick_expiry,
+    put_iv,
     straddle_mid,
 )
 
@@ -45,6 +48,36 @@ def test_otm_strike_rounded_to_step():
 
 def test_otm_put_mid_at_strike():
     assert otm_put_mid(fake_chain(), 720.0) == 3.5
+
+
+def test_nearest_strike_falls_back_when_exact_absent():
+    # A target strike outside the chain range must NOT raise (the old exact
+    # `.iloc[0]` raised IndexError); it resolves to the nearest present strike.
+    assert nearest_strike(fake_chain().puts, 600.0) == 710.0
+    assert nearest_strike(fake_chain().puts, 760.0) == 730.0
+
+
+def test_nearest_strike_empty_side_returns_none():
+    empty = fake_chain().puts.iloc[0:0]
+    assert nearest_strike(empty, 720.0) is None
+
+
+def test_otm_put_mid_out_of_range_uses_nearest_strike():
+    # With the 30% wing missing from the chain, fall back to the nearest edge
+    # instead of raising.
+    assert otm_put_mid(fake_chain(), 600.0) == 1.5
+    assert otm_put_mid(fake_chain(), 760.0) == 5.5
+    empty_chain = type("Chain", (), {"puts": fake_chain().puts.iloc[0:0],
+                                     "calls": fake_chain().calls})()
+    assert otm_put_mid(empty_chain, 720.0) == 0.0
+
+
+def test_iv_getters_fall_back_to_nearest_strike():
+    assert put_iv(fake_chain(), 600.0) == 0.15
+    assert call_iv(fake_chain(), 760.0) == 0.19
+    empty_chain = type("Chain", (), {"puts": fake_chain().puts.iloc[0:0],
+                                     "calls": fake_chain().calls})()
+    assert put_iv(empty_chain, 720.0) == 0.0
 
 
 def test_pick_expiry_nearest_to_target():
