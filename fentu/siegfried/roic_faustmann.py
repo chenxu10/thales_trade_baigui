@@ -172,16 +172,7 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
     merged_pairs = _merge_roic_histories(edgar_history, yf_history)
     roic_history = [roic for _, roic in merged_pairs]
 
-    market_cap = None
-    try:
-        market_cap = ticker_obj.fast_info.get("market_cap")
-    except Exception:
-        market_cap = None
-    if market_cap is None:
-        try:
-            market_cap = ticker_obj.info.get("marketCap")
-        except Exception:
-            market_cap = None
+    market_cap = fetch_market_cap(ticker_obj)
 
     return {
         "ticker": ticker,
@@ -194,6 +185,25 @@ def fetch_fundamentals(ticker: str) -> Dict[str, Optional[float]]:
         "debt": _latest(balance_sheet, "Total Debt"),
         "preferred_equity": _latest_any(balance_sheet, PREFERRED_ROWS),
     }
+
+def fetch_market_cap(ticker_obj):
+    """First usable market cap: fast_info (cheap), then info (heavy); None when both fail.
+
+    Sources are lazy lambdas so the heavyweight ``info`` property (a network
+    fetch) is only touched when fast_info comes up empty.
+    """
+    sources = (
+        lambda: ticker_obj.fast_info.get("market_cap"),
+        lambda: ticker_obj.info.get("marketCap"),
+    )
+    for source in sources:
+        try:
+            value = source()
+        except Exception:
+            value = None
+        if value is not None:
+            return value
+    return None
 
 
 def derive_roic(roic_history: Optional[List[float]], window: int = ROIC_WINDOW_YEARS) -> Optional[float]:

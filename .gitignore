@@ -25,5 +25,17 @@ strategies/
 research/
 counterfactual/
 
+# scraped research artifacts (job-board HTML/JSON) — must not be committed
+.research/
+.research_tmp/
+.jobresearch/
+scratch/
+*.raw
+bb.html
+bms.html
+d1.html
+pg.html
+w1.html
+
 # generated tail-cheapness charts (regenerated daily by tail_plot.py)
 figures/tail_cheapness_*.png

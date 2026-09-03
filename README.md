@@ -61,7 +61,7 @@ uv run pytest
 ```
 
 
-## TODO:
+## Begin From What You Finish:
 - ~~(TODO): merge all seven traits and review~~ (done 2026-08-23: all 6 canslim worktree branches merged; 7-trait report at `fentu/canslim/seven_traits_report.py`)
 ~~- (TODO): change pharma_bio_screen.py~~
 - (TODO): retrieve ngativity knowledge where lose moneys from your own money
@@ -69,14 +69,8 @@ uv run pytest
 - (TODO): Abstract forget details-Sampling-BinaryEvent-GreenBook 
 ~~- (TODO): shenxin jue cha wu jie~~
 ~~- (TODO): Gold mutual information~~
-- I am wrong USO/TLT are noise
-- Arbitarge and squeeze
-- You cannot hedge a slow dollor decline but a well-defined variables slow dollar decline refleced in it
-- (TODO): Fable code review
 ~~- (TODO): Parksin law 20 percent 80 percent value/Focus on last maximial~~
 ~~- (TODO): 30 year mortgage(MBB)~~
-- (TODO): Humble trade(Field not object)
+~~- (TODO): Humble trade(Field not object)~~
 ~~- (TODO): BackTest Idea Loop~~
-- (TODO): Strategy not benchmark/not CARG/cost-effectiveness of hedges(Three huice/guonihe/survivorship bias/kanleshuju)
-- (TODO): AI边界(人类的历史知识中负面和失败很少报道、小概率和样本空间以外、构建概念和建立理论)
-- TOOD: ROIC/Fautsmanratio for bio/sp/ndx
+- If I want to replicate I need to filter on 1971
