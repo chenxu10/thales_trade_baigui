@@ -140,7 +140,17 @@ def test_net_worth_treats_absent_lines_as_zero():
 
 
 def test_faustmann_ratio_is_market_cap_over_net_worth():
-    assert derive_faustmann_ratio(market_cap=18_500_000, net_worth=9_250_000) == pytest.approx(2.0)
+    """
+    The original definition is LEV/LRV
+    LEV: Land Expectation Value
+    LRV: Land Replacement Value
+    i : interest rate
+    B: Cash value of the wood
+
+    From P119 Umweg Dao of Capital
+    LEV = B/(1+r)**i - 1
+    """
+    assert derive_faustmann_ratio(market_cap=500_000, net_worth=250_000) == pytest.approx(2.0)
 
 
 def test_faustmann_ratio_none_on_missing_or_zero_legs():
