@@ -1,5 +1,8 @@
-# Thales Trading Bot
+# Thales Trade Baigui
+
 > It's much better to be convex than to be right, of course in a cost-effective way.
+
+> "For one whose wisdom is not equal to detecting and adapting to change, whose courage is not equal to decisive judgment, whose benevolence is not equal to knowing when to take and when to give, and whose strength is not equal to holding fast — even if he begs to learn my art, I will never teach him." — Sima Qian, *Records of the Grand Historian*.
 
 ## Main Features
 
@@ -29,8 +32,10 @@ Run the test suite:
 uv run pytest
 ```
 
-# 泰利斯交易机器人
+# 泰利斯与白圭
 > 凸性远比正确更重要，当然要以成本可控的方式。
+
+> 是故其智不足與權變，勇不足以決斷，仁不能以取予，彊不能有所守，雖欲學吾術，終不告之矣。《史记——货殖列传》
 
 
 ## 主要功能
