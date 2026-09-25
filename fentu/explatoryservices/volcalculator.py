@@ -249,7 +249,8 @@ class ReturnsRepository:
 
     def get_returns(self, instrument, period_length):
         prices = self.get_prices(instrument)
-        return np.log(prices / prices.shift(period_length))[period_length:]
+        returns = np.log(prices / prices.shift(period_length))
+        return returns[np.isfinite(returns)]
 
     def get_period_returns(self, instrument, period):
         """Non-overlapping calendar-period log returns for `period`.
