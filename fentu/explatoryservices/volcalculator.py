@@ -1,95 +1,22 @@
 """
-This script calculates volatility and return metrics for financial instruments.
+How do extreme values manifest themselves in real data?
 
-Topology Diagram (ASCII)
-========================
+Architecture
+------------
 
- External Dependencies
- +---------------------------------------------------------------------------+
- | yfinance | pandas | numpy | scipy.stats(norm,t) | curl_cffi.requests     |
- | matplotlib.pyplot | plotting_service (ps) | see_power_law (spl)          |
- +---------------------------------------------------------------------------+
-      |            |          |            |               |
-      | prices     | data     | tails/log  | (unused)      | plotting
-      v            v          v            v               v
+    figures/volcalculator_architecture.png
 
- Class Hierarchy & Relationships
- +-------------------------------+
- |   VolatilityCalculator        |  <<abstract base>>
- |   calculate_volatility()      |  -> NotImplementedError
- +---------------+---------------+
-                 |  inherits
-                 v
- +-------------------------------+
- | MeanAbsoluteDeviationVolatility|  (headline; MAD survives fat tails)
- | StandardDeviationVolatility   |  (kept for *_gaussian_only comparison)
- +---------------+---------------+
-                 |  used-by (Strategy pattern)
-                 v
- +-------------------------------+
- | DailyVolatility               |  <<context>>
- | - calculator: VolatilityCalc  |
- | calculate_1std_daily_vol()    |
- +---------------+---------------+
+Regenerate the figure after changing this module:
 
- Three injectable seams (extracted from the former God-Object facade):
- +---------------------------------------------------------------------------+
- | ReturnsRepository   (Seam 1 — the ONLY object that touches the network)   |
- |   __init__(start_date, end_date)   <- cheap, no I/O                       |
- |   _raw_open_high_low_close(instrument)            -> yf.Ticker + curl_cffi session;      |
- |                                       strips tz from the index            |
-|   get_prices(instrument)           -> _raw_open_high_low_close + start/end window        |
-|   get_returns(instrument, n)       -> np.log(prices/shift(n))[n:]  (daily)                |
-|   get_period_returns(instrument, period) -> non-overlapping calendar log returns          |
- |   get_vix_open_high_low_close() / get_vix_prices()-> full ^VIX history, UN-windowed      |
- +---------------------------------------------------------------------------+
- +---------------------------------------------------------------------------+
- | MarketClock          (Seam 2 — DST / market-open logic, pure of I/O)      |
- |   now_eastern()                   -> delegates to module _now_eastern()   |
- |   market_opened_today(last, now)  -> last==now.date() and >=9:30 ET       |
- |   current_vix_value(open_high_low_close, now_et) -> (label, value): open if opened else  |
- |                                       last close                          |
- +---------------------------------------------------------------------------+
- +---------------------------------------------------------------------------+
- | VolatilityDashboard  (Seam 3 — presentation, pure of fetching)            |
- |   show_panel_unavailable(ax,...)  -> centered "unavailable" note          |
- |   plot_vix_panel(ax, open_high_low_close, current_value) -> pure render from prebuilt    |
- |       open_high_low_close + optional (label, value) current-value pair   |
- +---------------------------------------------------------------------------+
-                 |  composed by
-                 v
- +---------------------------------------------------------------------------+
- |                   VolatilityFacade  (thin orchestrator)                   |
- |  instrument | start_date | end_date                                       |
- |  _repository | _clock | _dashboard   <- injected, default-constructed     |
- |  _returns_cache                       <- lazy; populated on first access  |
- |                                                                           |
- |  Construction does NO network I/O.                                        |
- |  daily/weekly/monthly/yearly_returns are @property + setter, cached.      |
- |  return_periods is a @property building the dict lazily.                  |
- |                                                                           |
- |  Each former private helper (_get_prices, _get_vix_open_high_low_close,   |
- |  _get_current_vix_value, _plot_*_panel) is kept                          |
- |  as a delegating shim so existing callers/tests stay green.               |
- |                                                                           |
- |  [Volatility]    calculate_daily_volatility() -> DailyVolatility          |
- |  [Extreme]       find_negative/positive_extreme_returns(k|threshold)      |
-  |  [Visualization] visualize_percentage_change(period)                      |
- |     +-> _prepare_percentage_change_data() (data view-model)               |
- |     +-> _plot_percentage_change()                                         |
- |           +-> ps.qq_plot / ps.histgram_plot / spl.plot_loglog_with_fit    |
- |           +-> _plot_vix_panel             (delegates -> dashboard)        |
- |           +-> matplotlib 3x2 gridspec + suptitle                          |
- |  [Reporting]     get_past_week_price_and_log_returns()                    |
- +---------------------------------------------------------------------------+
+    uv run python -m fentu.metaprogramming.volcalculator_architecture
 
- Run it
-+---------------------------------------------------------------------------+
-| uv run fentu/explatoryservices/seechange.py <timeframe> <ticker>           |
-|   timeframes: daily | weekly | monthly | yearly                            |
-|   e.g. uv run fentu/explatoryservices/seechange.py monthly QQQ             |
-|   e.g. uv run fentu/explatoryservices/seechange.py daily portfolio         |
-+---------------------------------------------------------------------------+
+Run it
+------
+
+    uv run fentu/explatoryservices/seechange.py <timeframe> <ticker>
+      timeframes: daily | weekly | monthly | yearly
+      e.g. uv run fentu/explatoryservices/seechange.py monthly QQQ
+      e.g. uv run fentu/explatoryservices/seechange.py daily portfolio
 """
 
 import yfinance as yf
